@@ -1,3 +1,5 @@
+<img width="716" height="508" alt="Screenshot 2026-03-05 at 11 30 05 PM" src="https://github.com/user-attachments/assets/69353f5f-c4dc-418e-b5cd-c39c3833e438" />
+
 # PeerTV
 
 A tvOS client for user-selected PeerTube instances, built with SwiftUI and async/await.
