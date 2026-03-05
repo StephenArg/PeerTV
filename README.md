@@ -1,4 +1,4 @@
-<img width="716" height="508" alt="Screenshot 2026-03-05 at 11 30 05 PM" src="https://github.com/user-attachments/assets/69353f5f-c4dc-418e-b5cd-c39c3833e438" />
+<img width="422" height="300" alt="Screenshot 2026-03-05 at 11 30 05 PM" src="https://github.com/user-attachments/assets/69353f5f-c4dc-418e-b5cd-c39c3833e438" />
 
 # PeerTV
 
