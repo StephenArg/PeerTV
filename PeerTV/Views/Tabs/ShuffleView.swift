@@ -76,7 +76,7 @@ struct ShuffleView: View {
             VideoDetailView(videoId: detailVideoId)
         }
         .task {
-            vm.configure(apiClient: session.apiClient)
+            vm.configure(apiClient: session.apiClient, instanceURL: session.baseURL)
             await vm.loadRandom()
         }
     }

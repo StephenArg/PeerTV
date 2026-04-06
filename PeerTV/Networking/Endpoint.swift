@@ -12,6 +12,7 @@ enum Endpoint {
     // Videos
     case videos(sort: String, start: Int, count: Int, includeAllPrivacy: Bool = false)
     case videoDetail(id: String)
+    case videoFileToken(id: String)
 
     // Channels
     case videoChannels(start: Int, count: Int)
@@ -41,6 +42,8 @@ enum Endpoint {
 
     // Playlist actions (auth required)
     case addVideoToPlaylist(playlistId: Int, videoId: Int)
+    case removePlaylistElement(playlistId: Int, elementId: Int)
+    case reorderPlaylistVideos(playlistId: Int, startPosition: Int, insertAfterPosition: Int, reorderLength: Int)
 
     // Subscription actions (auth required)
     case subscriptionExist(uri: String)
@@ -68,6 +71,8 @@ enum Endpoint {
             return "/api/v1/videos"
         case .videoDetail(let id):
             return "/api/v1/videos/\(id)"
+        case .videoFileToken(let id):
+            return "/api/v1/videos/\(id)/token"
         case .videoChannels:
             return "/api/v1/video-channels"
         case .channelDetail(let handle):
@@ -98,6 +103,10 @@ enum Endpoint {
             return "/api/v1/videos/\(id)/rate"
         case .addVideoToPlaylist(let playlistId, _):
             return "/api/v1/video-playlists/\(playlistId)/videos"
+        case .removePlaylistElement(let playlistId, let elementId):
+            return "/api/v1/video-playlists/\(playlistId)/videos/\(elementId)"
+        case .reorderPlaylistVideos(let playlistId, _, _, _):
+            return "/api/v1/video-playlists/\(playlistId)/videos/reorder"
         case .subscriptionExist:
             return "/api/v1/users/me/subscriptions/exist"
         case .subscribe:
@@ -145,6 +154,8 @@ enum Endpoint {
                 + allPrivacyItems()
         case .subscriptionExist(let uri):
             return [URLQueryItem(name: "uris", value: uri)]
+        case .randomVideos:
+            return [URLQueryItem(name: "count", value: "28")]
         default:
             return []
         }
@@ -152,11 +163,12 @@ enum Endpoint {
 
     var method: String {
         switch self {
-        case .usersToken, .addVideoToPlaylist, .subscribe:
+        case .usersToken, .addVideoToPlaylist, .subscribe, .reorderPlaylistVideos,
+             .videoFileToken:
             return "POST"
         case .rateVideo, .watchVideo:
             return "PUT"
-        case .unsubscribe:
+        case .unsubscribe, .removePlaylistElement:
             return "DELETE"
         default:
             return "GET"
@@ -169,6 +181,12 @@ enum Endpoint {
             return try? JSONSerialization.data(withJSONObject: ["rating": rating])
         case .addVideoToPlaylist(_, let videoId):
             return try? JSONSerialization.data(withJSONObject: ["videoId": videoId])
+        case .reorderPlaylistVideos(_, let startPosition, let insertAfterPosition, let reorderLength):
+            return try? JSONSerialization.data(withJSONObject: [
+                "startPosition": startPosition,
+                "insertAfterPosition": insertAfterPosition,
+                "reorderLength": reorderLength
+            ])
         case .subscribe(let uri):
             return try? JSONSerialization.data(withJSONObject: ["uri": uri])
         case .watchVideo(_, let currentTime):
@@ -182,8 +200,9 @@ enum Endpoint {
         switch self {
         case .mySubscriptions, .mySubscriptionVideos, .myHistory, .usersMe,
              .myVideoRating, .rateVideo, .addVideoToPlaylist,
+             .removePlaylistElement, .reorderPlaylistVideos,
              .subscriptionExist, .subscribe, .unsubscribe,
-             .watchVideo:
+             .watchVideo, .videoFileToken:
             return true
         default:
             return false

@@ -30,6 +30,39 @@ struct Video: Decodable, Identifiable, Hashable {
         lhs.stableId == rhs.stableId
     }
 
+    /// Fills in channel avatars (e.g. after loading plugin random-video rows that omit them).
+    func withChannelAvatars(_ avatars: [ActorImage]) -> Video {
+        let ch = channel
+        let newChannel = VideoChannelSummary(
+            id: ch?.id,
+            name: ch?.name,
+            displayName: ch?.displayName,
+            url: ch?.url,
+            host: ch?.host,
+            avatars: avatars
+        )
+        return Video(
+            id: id,
+            uuid: uuid,
+            name: name,
+            description: description,
+            duration: duration,
+            views: views,
+            likes: likes,
+            dislikes: dislikes,
+            createdAt: createdAt,
+            publishedAt: publishedAt,
+            thumbnailPath: thumbnailPath,
+            previewPath: previewPath,
+            embedPath: embedPath,
+            channel: newChannel,
+            account: account,
+            privacy: privacy,
+            streamingPlaylists: streamingPlaylists,
+            files: files
+        )
+    }
+
     /// Best playback URL: prefer HLS, fall back to web video file.
     var playbackURL: URL? {
         if let hls = streamingPlaylists?.first?.files?.first?.fileUrl ?? streamingPlaylists?.first?.playlistUrl,
@@ -75,6 +108,30 @@ struct Video: Decodable, Identifiable, Hashable {
         let rel = RelativeDateTimeFormatter()
         rel.unitsStyle = .full
         return rel.localizedString(for: date, relativeTo: Date())
+    }
+
+    /// e.g. 1200 → "1.2K views", 2_500_000 → "2.5M views".
+    var abbreviatedViewsLabel: String? {
+        guard let v = views else { return nil }
+        return "\(Self.abbreviateViewCount(v)) views"
+    }
+
+    private static func abbreviateViewCount(_ n: Int) -> String {
+        if n >= 1_000_000 {
+            return abbreviateUnit(Double(n) / 1_000_000.0, suffix: "M")
+        }
+        if n >= 1_000 {
+            return abbreviateUnit(Double(n) / 1_000.0, suffix: "K")
+        }
+        return "\(n)"
+    }
+
+    private static func abbreviateUnit(_ value: Double, suffix: String) -> String {
+        let rounded = (value * 10).rounded() / 10
+        if abs(rounded - rounded.rounded()) < 0.05 {
+            return String(format: "%.0f%@", rounded.rounded(), suffix)
+        }
+        return String(format: "%.1f%@", rounded, suffix)
     }
 
     /// All available resolution options across HLS and web video files,
@@ -169,4 +226,12 @@ struct VideoPrivacy: Decodable {
 struct UserVideoRating: Decodable {
     let videoId: Int?
     let rating: String?
+}
+
+struct VideoFileTokenResponse: Decodable {
+    let files: VideoFileTokenData
+}
+
+struct VideoFileTokenData: Decodable {
+    let token: String
 }

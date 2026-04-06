@@ -13,8 +13,23 @@ struct VideoPlaylist: Decodable, Identifiable, Hashable {
     let ownerAccount: AccountSummary?
     let videoChannel: VideoChannelSummary?
 
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
-    static func == (lhs: VideoPlaylist, rhs: VideoPlaylist) -> Bool { lhs.id == rhs.id }
+    /// Include fields that affect list tiles and navigation labels. Using only `id` made SwiftUI treat
+    /// refetched playlists as unchanged, so `videosLength` and thumbnails never updated on screen.
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(videosLength)
+        hasher.combine(thumbnailPath)
+        hasher.combine(displayName)
+        hasher.combine(updatedAt)
+    }
+
+    static func == (lhs: VideoPlaylist, rhs: VideoPlaylist) -> Bool {
+        lhs.id == rhs.id
+            && lhs.videosLength == rhs.videosLength
+            && lhs.thumbnailPath == rhs.thumbnailPath
+            && lhs.displayName == rhs.displayName
+            && lhs.updatedAt == rhs.updatedAt
+    }
 }
 
 struct PlaylistPrivacy: Decodable {
@@ -28,4 +43,11 @@ struct PlaylistElement: Decodable, Identifiable {
     let startTimestamp: Int?
     let stopTimestamp: Int?
     let video: Video?
+
+    /// Stable key for `ForEach` when `id` may be missing.
+    var stableRowID: String {
+        if let id { return "pl:\(id)" }
+        if let sid = video?.stableId { return "pv:\(sid)" }
+        return "p:unknown"
+    }
 }

@@ -181,41 +181,32 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
             player.pause()
             showLoadingOverlay(in: controller)
 
-            // Remove the current item so pressing play on the remote
-            // cannot resume the old resolution while the new one loads.
-            player.replaceCurrentItem(with: nil)
-
             let asset = AVPlayerViewControllerRepresentable.makeAsset(url: targetURL, token: accessToken)
-            asset.loadValuesAsynchronously(forKeys: ["playable", "duration"]) {
-                [weak self, weak player] in
+            let newItem = AVPlayerItem(asset: asset)
+            player.replaceCurrentItem(with: newItem)
+
+            let tolerance = CMTime(seconds: 5, preferredTimescale: 600)
+
+            statusObservation = newItem.observe(\.status, options: [.new]) {
+                [weak self, weak player] item, _ in
                 DispatchQueue.main.async {
-                    guard let self, let player else { return }
-
-                    let newItem = AVPlayerItem(asset: asset)
-                    player.replaceCurrentItem(with: newItem)
-
-                    // Seek immediately so the player buffers from the target
-                    // position instead of from the beginning of the stream.
-                    let tolerance = CMTime(seconds: 2, preferredTimescale: 600)
-                    player.seek(to: seekTime, toleranceBefore: tolerance, toleranceAfter: tolerance) {
-                        [weak self, weak player] finished in
-                        guard finished else { return }
+                    guard let self else { return }
+                    if item.status == .readyToPlay {
+                        self.statusObservation?.invalidate()
+                        self.statusObservation = nil
                         player?.rate = targetSpeed
-                        DispatchQueue.main.async {
-                            self?.isSwitching = false
-                            self?.removeLoadingOverlay()
+                        player?.seek(to: seekTime, toleranceBefore: tolerance, toleranceAfter: tolerance) {
+                            _ in
+                            DispatchQueue.main.async {
+                                self.isSwitching = false
+                                self.removeLoadingOverlay()
+                            }
                         }
-                    }
-
-                    self.statusObservation = newItem.observe(\.status, options: [.new]) {
-                        [weak self] item, _ in
-                        guard item.status == .failed else { return }
-                        self?.statusObservation?.invalidate()
-                        self?.statusObservation = nil
-                        DispatchQueue.main.async {
-                            self?.isSwitching = false
-                            self?.removeLoadingOverlay()
-                        }
+                    } else if item.status == .failed {
+                        self.statusObservation?.invalidate()
+                        self.statusObservation = nil
+                        self.isSwitching = false
+                        self.removeLoadingOverlay()
                     }
                 }
             }

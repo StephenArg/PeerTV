@@ -112,6 +112,7 @@ final class VideoDetailViewModel: ObservableObject {
         do {
             _ = try await apiClient.rawRequest(.addVideoToPlaylist(playlistId: playlistId, videoId: numericId))
             playlistMessage = "Added to playlist"
+            NotificationCenter.default.post(name: .peerTVPlaylistsNeedRefresh, object: nil)
         } catch {
             playlistMessage = "Failed to add to playlist"
         }

@@ -23,6 +23,9 @@ final class PlaylistsViewModel: ObservableObject {
     }
 
     func loadInitial() async {
+        // Clear loading/total so a new fetch always runs (avoids guard failures after cancellation or pagination).
+        isLoading = false
+        total = nil
         currentStart = 0
         playlists = []
         await loadMore()
@@ -49,4 +52,15 @@ final class PlaylistsViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
     }
+}
+
+extension Notification.Name {
+    /// Posted when playlist membership may have changed (e.g. add-to-playlist) or when the Playlists tab is focused.
+    static let peerTVPlaylistsNeedRefresh = Notification.Name("PeerTV.playlistsNeedRefresh")
+
+    /// Posted when playlist autoplay advances (or starts) so the grid can scroll and move focus to the active tile.
+    static let peerTVPlaylistNowPlayingVideoId = Notification.Name("PeerTV.playlistNowPlayingVideoId")
+
+    /// Posted when the player is dismissed so the playlist can restore focus to the last-played tile.
+    static let peerTVPlayerDismissed = Notification.Name("PeerTV.playerDismissed")
 }

@@ -6,7 +6,7 @@ struct LoginView: View {
     @FocusState private var focusedField: Field?
 
     private enum Field: Hashable {
-        case username, password
+        case username, password, otp
     }
 
     var body: some View {
@@ -29,15 +29,36 @@ struct LoginView: View {
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
                     .focused($focusedField, equals: .username)
+                    .disabled(vm.needsOTP)
+                    .opacity(vm.needsOTP ? 0.5 : 1)
                     .padding()
                     .background(Color.white.opacity(0.1))
                     .cornerRadius(12)
 
                 SecureField("Password", text: $vm.password)
                     .focused($focusedField, equals: .password)
+                    .disabled(vm.needsOTP)
+                    .opacity(vm.needsOTP ? 0.5 : 1)
                     .padding()
                     .background(Color.white.opacity(0.1))
                     .cornerRadius(12)
+
+                if vm.needsOTP {
+                    VStack(spacing: 8) {
+                        Text("Enter the code from your authenticator app")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        TextField("Authenticator code", text: $vm.otpCode)
+                            .textFieldStyle(.plain)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                            .focused($focusedField, equals: .otp)
+                            .padding()
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(12)
+                    }
+                }
 
                 if let error = vm.errorMessage {
                     Text(error)
@@ -52,7 +73,7 @@ struct LoginView: View {
                         ProgressView()
                             .frame(maxWidth: .infinity)
                     } else {
-                        Text("Log In")
+                        Text(vm.needsOTP ? "Verify" : "Log In")
                             .frame(maxWidth: .infinity)
                     }
                 }
@@ -69,5 +90,8 @@ struct LoginView: View {
         }
         .padding(60)
         .onAppear { focusedField = .username }
+        .onChange(of: vm.needsOTP) { needsOTP in
+            if needsOTP { focusedField = .otp }
+        }
     }
 }

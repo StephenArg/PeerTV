@@ -5,7 +5,8 @@ struct OAuthService: Sendable {
     let apiClient: PeerTubeAPIClient
 
     /// Full login flow: fetch client credentials, then exchange username/password for tokens.
-    func login(baseURL: URL, username: String, password: String) async throws -> OAuthTokenResponse {
+    /// Pass a non-nil `otpCode` to include the `x-peertube-otp` header for 2FA-enabled accounts.
+    func login(baseURL: URL, username: String, password: String, otpCode: String? = nil) async throws -> OAuthTokenResponse {
         let client: OAuthClientResponse = try await apiClient.request(.oauthClientsLocal)
         let body: [String: String] = [
             "client_id": client.clientId,
@@ -15,7 +16,11 @@ struct OAuthService: Sendable {
             "username": username,
             "password": password
         ]
-        return try await apiClient.postForm(.usersToken, body: body)
+        var headers: [String: String] = [:]
+        if let otp = otpCode?.trimmingCharacters(in: .whitespaces), !otp.isEmpty {
+            headers["x-peertube-otp"] = otp
+        }
+        return try await apiClient.postForm(.usersToken, body: body, additionalHeaders: headers)
     }
 
     /// Refresh an existing token.

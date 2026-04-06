@@ -2,6 +2,17 @@ import UIKit
 import AVKit
 import SwiftUI
 
+// MARK: - Playlist playback queue
+
+/// When playing from a playlist, carries ordered video ids and whether to advance when an item ends.
+struct PlaylistPlaybackQueue {
+    let videoIds: [String]
+    let currentIndex: Int
+    let autoplayEnabled: Bool
+    let apiClient: PeerTubeAPIClient
+    let accessToken: String?
+}
+
 // MARK: - PlayerPresenter
 
 /// Presents AVPlayerViewController directly via UIKit — no SwiftUI fullScreenCover
@@ -13,12 +24,30 @@ final class PlayerPresenter {
     private var isPresenting = false
     private var loadingOverlay: UIView?
 
-    func play(videoId: String, apiClient: PeerTubeAPIClient, accessToken: String?) {
+    func play(
+        videoId: String,
+        apiClient: PeerTubeAPIClient,
+        accessToken: String?,
+        playlistQueue: PlaylistPlaybackQueue? = nil
+    ) {
         guard !isPresenting else { return }
         isPresenting = true
 
         guard let window = Self.keyWindow else {
             isPresenting = false
+            return
+        }
+
+        if let localURL = DownloadManager.shared.localFileURL(for: videoId) {
+            presentPlayer(
+                url: localURL,
+                resolutions: [],
+                accessToken: nil,
+                videoId: videoId,
+                apiClient: apiClient,
+                playlistQueue: playlistQueue,
+                isLocalDownload: true
+            )
             return
         }
 
@@ -44,7 +73,9 @@ final class PlayerPresenter {
                     resolutions: video.resolutionOptions,
                     accessToken: accessToken,
                     videoId: videoId,
-                    apiClient: apiClient
+                    apiClient: apiClient,
+                    playlistQueue: playlistQueue,
+                    isLocalDownload: false
                 )
             } catch {
                 removeLoadingOverlay()
@@ -60,7 +91,9 @@ final class PlayerPresenter {
         resolutions: [ResolutionOption],
         accessToken: String?,
         videoId: String,
-        apiClient: PeerTubeAPIClient
+        apiClient: PeerTubeAPIClient,
+        playlistQueue: PlaylistPlaybackQueue?,
+        isLocalDownload: Bool
     ) {
         guard let root = Self.keyWindow?.rootViewController else {
             isPresenting = false
@@ -83,7 +116,9 @@ final class PlayerPresenter {
             player: player,
             controller: playerVC,
             videoId: videoId,
-            apiClient: apiClient
+            apiClient: apiClient,
+            playlistQueue: playlistQueue,
+            isLocalDownload: isLocalDownload
         ) { [weak self] in
             self?.isPresenting = false
         }
@@ -173,11 +208,12 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private let onDismiss: () -> Void
     private var didCallDismiss = false
 
-    private let resolutions: [ResolutionOption]
-    private let autoURL: URL
+    private var resolutions: [ResolutionOption]
+    private var autoURL: URL
     private let accessToken: String?
-    private let videoId: String
+    private var videoId: String
     private let apiClient: PeerTubeAPIClient?
+    private var playlistQueue: PlaylistPlaybackQueue?
     private var currentLabel: String = "Auto"
     private var currentSpeed: Float = 1.0
     private var statusObservation: NSKeyValueObservation?
@@ -185,6 +221,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private var isSwitching = false
     private var endObserver: Any?
     private var progressTimeObserver: Any?
+    private let isLocalDownload: Bool
 
     private static let speeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
     private static let watchReportInterval: Double = 30
@@ -192,6 +229,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     init(resolutions: [ResolutionOption], initialURL: URL, accessToken: String?,
          player: AVPlayer, controller: AVPlayerViewController,
          videoId: String, apiClient: PeerTubeAPIClient?,
+         playlistQueue: PlaylistPlaybackQueue?,
+         isLocalDownload: Bool,
          onDismiss: @escaping () -> Void) {
         self.resolutions = resolutions
         self.autoURL = initialURL
@@ -200,6 +239,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         self.controller = controller
         self.videoId = videoId
         self.apiClient = apiClient
+        self.playlistQueue = playlistQueue
+        self.isLocalDownload = isLocalDownload
         self.onDismiss = onDismiss
         super.init()
 
@@ -208,10 +249,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             object: player.currentItem,
             queue: .main
         ) { [weak self] _ in
-            self?.reportCurrentTime()
-            self?.controller?.dismiss(animated: true) {
-                self?.performDismissCleanup()
-            }
+            self?.handlePlaybackEnded()
         }
 
         reportCurrentTime()
@@ -221,6 +259,128 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     deinit {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let progressTimeObserver, let player { player.removeTimeObserver(progressTimeObserver) }
+    }
+
+    // MARK: - End of item / playlist autoplay
+
+    private func handlePlaybackEnded() {
+        reportCurrentTime()
+        if let queue = playlistQueue,
+           queue.autoplayEnabled,
+           queue.currentIndex + 1 < queue.videoIds.count {
+            let nextId = queue.videoIds[queue.currentIndex + 1]
+            let nextQueue = PlaylistPlaybackQueue(
+                videoIds: queue.videoIds,
+                currentIndex: queue.currentIndex + 1,
+                autoplayEnabled: queue.autoplayEnabled,
+                apiClient: queue.apiClient,
+                accessToken: queue.accessToken
+            )
+            NotificationCenter.default.post(
+                name: .peerTVPlaylistNowPlayingVideoId,
+                object: nil,
+                userInfo: ["videoId": nextId]
+            )
+            Task { @MainActor [weak self] in
+                await self?.transitionToNextPlaylistItem(nextQueue: nextQueue, nextVideoId: nextId)
+            }
+            return
+        }
+        controller?.dismiss(animated: true) { [weak self] in
+            self?.performDismissCleanup()
+        }
+    }
+
+    /// Keeps the same `AVPlayerViewController` open and swaps the item (no flash back to the playlist).
+    @MainActor
+    private func transitionToNextPlaylistItem(nextQueue: PlaylistPlaybackQueue, nextVideoId: String) async {
+        guard let player, let controller, !didCallDismiss else { return }
+
+        isSwitching = true
+        player.pause()
+        showLoadingOverlay(in: controller)
+
+        do {
+            let data = try await nextQueue.apiClient.rawRequest(.videoDetail(id: nextVideoId))
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            decoder.dateDecodingStrategy = .iso8601
+            let video = try decoder.decode(Video.self, from: data)
+
+            guard let url = video.hlsPlaylistURL ?? video.playbackURL else {
+                throw URLError(.badURL)
+            }
+
+            if let oldObs = endObserver {
+                NotificationCenter.default.removeObserver(oldObs)
+            }
+            endObserver = nil
+            statusObservation?.invalidate()
+            statusObservation = nil
+
+            videoId = nextVideoId
+            playlistQueue = nextQueue
+            resolutions = video.resolutionOptions
+            autoURL = url
+            currentLabel = "Auto"
+
+            let asset = AVPlayerViewControllerRepresentable.makeAsset(url: url, token: nextQueue.accessToken)
+            let newItem = AVPlayerItem(asset: asset)
+
+            if let obs = progressTimeObserver, let p = self.player {
+                p.removeTimeObserver(obs)
+                progressTimeObserver = nil
+            }
+
+            let newPlayer = AVPlayer(playerItem: newItem)
+            newPlayer.automaticallyWaitsToMinimizeStalling = true
+            self.player = newPlayer
+            controller.player = newPlayer
+
+            endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: newItem,
+                queue: .main
+            ) { [weak self] _ in
+                self?.handlePlaybackEnded()
+            }
+            startProgressReporting()
+
+            let tolerance = CMTime(seconds: 0.1, preferredTimescale: 600)
+            statusObservation = newItem.observe(\.status, options: [.new]) { [weak self, weak newPlayer] item, _ in
+                DispatchQueue.main.async {
+                    guard let self, let newPlayer else { return }
+                    if item.status == .readyToPlay {
+                        self.statusObservation?.invalidate()
+                        self.statusObservation = nil
+                        newPlayer.seek(to: .zero, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
+                            guard finished else { return }
+                            DispatchQueue.main.async {
+                                newPlayer.rate = self.currentSpeed
+                                self.isSwitching = false
+                                self.removeLoadingOverlay()
+                                self.refreshMenus()
+                                newPlayer.play()
+                            }
+                        }
+                    } else if item.status == .failed {
+                        self.statusObservation?.invalidate()
+                        self.statusObservation = nil
+                        self.isSwitching = false
+                        self.removeLoadingOverlay()
+                        self.controller?.dismiss(animated: true) {
+                            self.performDismissCleanup()
+                        }
+                    }
+                }
+            }
+        } catch {
+            isSwitching = false
+            removeLoadingOverlay()
+            controller.dismiss(animated: true) { [weak self] in
+                self?.performDismissCleanup()
+            }
+        }
     }
 
     // MARK: Watch history reporting
@@ -260,6 +420,11 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         player?.pause()
         statusObservation = nil
         removeLoadingOverlay()
+        NotificationCenter.default.post(
+            name: .peerTVPlayerDismissed,
+            object: nil,
+            userInfo: ["videoId": videoId]
+        )
         onDismiss()
     }
 
@@ -317,6 +482,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         let seekTime = player.currentTime()
         let targetSpeed = currentSpeed
         let targetURL = option?.url ?? autoURL
+        let isPrivateHLS = targetURL.pathExtension.lowercased() == "m3u8"
+            && targetURL.path.contains("/private/")
 
         currentLabel = option?.label ?? "Auto"
         isSwitching = true
@@ -326,43 +493,86 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         player.pause()
         showLoadingOverlay(in: controller)
 
-        let asset = AVPlayerViewControllerRepresentable.makeAsset(url: targetURL, token: accessToken)
-        let newItem = AVPlayerItem(asset: asset)
-        newItem.preferredForwardBufferDuration = 10
-        player.automaticallyWaitsToMinimizeStalling = true
+        if isPrivateHLS, let apiClient {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let resp: VideoFileTokenResponse = try await apiClient.request(.videoFileToken(id: self.videoId))
+                    var components = URLComponents(url: targetURL, resolvingAgainstBaseURL: false)!
+                    var items = components.queryItems ?? []
+                    items.append(URLQueryItem(name: "videoFileToken", value: resp.files.token))
+                    items.append(URLQueryItem(name: "reinjectVideoFileToken", value: "true"))
+                    components.queryItems = items
+                    let tokenizedURL = components.url ?? targetURL
 
-        player.replaceCurrentItem(with: newItem)
+                    let asset = AVURLAsset(url: tokenizedURL)
+                    self.performAssetSwap(
+                        asset: asset, seekTime: seekTime, targetSpeed: targetSpeed,
+                        controller: controller
+                    )
+                } catch {
+                    self.isSwitching = false
+                    self.removeLoadingOverlay()
+                }
+            }
+        } else {
+            let asset = AVPlayerViewControllerRepresentable.makeAsset(url: targetURL, token: accessToken)
+            performAssetSwap(
+                asset: asset, seekTime: seekTime, targetSpeed: targetSpeed,
+                controller: controller
+            )
+        }
+
+        refreshMenus()
+    }
+
+    private func performAssetSwap(
+        asset: AVURLAsset, seekTime: CMTime, targetSpeed: Float,
+        controller: AVPlayerViewController
+    ) {
+        let newItem = AVPlayerItem(asset: asset)
 
         if let oldObs = endObserver {
             NotificationCenter.default.removeObserver(oldObs)
+            endObserver = nil
         }
+        if let obs = progressTimeObserver, let p = self.player {
+            p.removeTimeObserver(obs)
+            progressTimeObserver = nil
+        }
+        statusObservation?.invalidate()
+        statusObservation = nil
+
+        // Create a fresh AVPlayer — replaceCurrentItem on tvOS with HLS
+        // causes the new item to hang at status=0 indefinitely.
+        let newPlayer = AVPlayer(playerItem: newItem)
+        self.player = newPlayer
+        controller.player = newPlayer
+
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: newItem,
             queue: .main
         ) { [weak self] _ in
-            self?.reportCurrentTime()
-            self?.controller?.dismiss(animated: true) {
-                self?.performDismissCleanup()
-            }
+            self?.handlePlaybackEnded()
         }
+        startProgressReporting()
 
-        let tolerance = CMTime(seconds: 2, preferredTimescale: 600)
+        let tolerance = CMTime(seconds: 5, preferredTimescale: 600)
 
         statusObservation = newItem.observe(\.status, options: [.new]) {
-            [weak self, weak player] item, _ in
+            [weak self, weak newPlayer] item, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if item.status == .readyToPlay {
                     self.statusObservation?.invalidate()
                     self.statusObservation = nil
-                    player?.seek(to: seekTime, toleranceBefore: tolerance, toleranceAfter: tolerance) {
-                        [weak self, weak player] finished in
-                        guard finished else { return }
+                    newPlayer?.rate = targetSpeed
+                    newPlayer?.seek(to: seekTime, toleranceBefore: tolerance, toleranceAfter: tolerance) {
+                        finished in
                         DispatchQueue.main.async {
-                            player?.rate = targetSpeed
-                            self?.isSwitching = false
-                            self?.removeLoadingOverlay()
+                            self.isSwitching = false
+                            self.removeLoadingOverlay()
                         }
                     }
                 } else if item.status == .failed {
@@ -373,8 +583,6 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                 }
             }
         }
-
-        refreshMenus()
     }
 
     private func setSpeed(_ speed: Float) {

@@ -39,15 +39,18 @@ struct APIExplorerView: View {
             }
             .disabled(isLoading)
 
-            ScrollView {
+            ScrollView(.vertical) {
                 Text(jsonResult)
                     .font(.system(.caption2, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
             }
+            .scrollIndicators(.visible)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.black.opacity(0.3))
             .cornerRadius(8)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(60)
         .navigationTitle("API Explorer")
     }

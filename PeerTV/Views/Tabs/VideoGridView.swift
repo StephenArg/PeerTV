@@ -6,6 +6,7 @@ struct VideoGridView: View {
     @State private var detailVideoId: String = ""
     @State private var showDetail = false
     @State private var showSearch = false
+    @State private var showSortDialog = false
     @State private var didLongPress = false
 
     private let columns = [
@@ -16,22 +17,37 @@ struct VideoGridView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
                 HStack {
-                    Text("Trending")
+                    Text(vm.currentListSort.displayName)
                         .font(.title3)
                         .bold()
 
-                    Button {
-                        showSearch = true
-                    } label: {
-                        HStack(spacing: 20) {
-                            Image(systemName: "magnifyingglass")
-                            Text("Search")
+                    HStack(spacing: 35) {
+                        Button {
+                            showSearch = true
+                        } label: {
+                            HStack(spacing: 20) {
+                                Image(systemName: "magnifyingglass")
+                                Text("Search")
+                            }
+                            .font(.callout)
+                            .padding(.horizontal, 48)
+                            .padding(.vertical, 12)
                         }
-                        .font(.callout)
-                        .padding(.horizontal, 48)
-                        .padding(.vertical, 12)
+                        .buttonStyle(.card)
+
+                        Button {
+                            showSortDialog = true
+                        } label: {
+                            HStack(spacing: 20) {
+                                Image(systemName: "arrow.up.arrow.down.circle")
+                                Text("Sort")
+                            }
+                            .font(.callout)
+                            .padding(.horizontal, 48)
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.card)
                     }
-                    .buttonStyle(.card)
                 }
                 .padding(.horizontal, 50)
 
@@ -83,6 +99,18 @@ struct VideoGridView: View {
         }
         .navigationDestination(isPresented: $showSearch) {
             SearchView()
+        }
+        .confirmationDialog(
+            "Sort by",
+            isPresented: $showSortDialog,
+            titleVisibility: .visible
+        ) {
+            ForEach(HomeVideoListSort.dialogOrder) { option in
+                Button(option == vm.currentListSort ? "\(option.displayName) ✓" : option.displayName) {
+                    Task { await vm.applyListSort(option) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
         }
         .task {
             vm.configure(apiClient: session.apiClient, isAuthenticated: session.phase == .authenticated)
@@ -158,11 +186,11 @@ struct VideoCardView: View {
             if let date = video.relativeDate {
                 Text(date)
             }
-            if video.relativeDate != nil, video.views != nil {
+            if video.relativeDate != nil, video.abbreviatedViewsLabel != nil {
                 Text(" · ")
             }
-            if let views = video.views {
-                Text("\(views) views")
+            if let label = video.abbreviatedViewsLabel {
+                Text(label)
             }
         }
         .font(.caption2)

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PlaylistListView: View {
     @EnvironmentObject var session: SessionStore
+    @Environment(\.peerTVPlaylistsTabRefreshToken) private var playlistsTabRefreshToken
     @StateObject private var vm = PlaylistsViewModel()
 
     private let columns = [
@@ -43,13 +44,35 @@ struct PlaylistListView: View {
                 ContentUnavailableView(error, systemImage: "exclamationmark.triangle")
             }
         }
-        .task {
-            vm.configure(
-                apiClient: session.apiClient,
-                accountName: session.username.isEmpty ? nil : session.username
-            )
-            await vm.loadInitial()
+        .onAppear {
+            Task { await refreshPlaylists() }
         }
+        .onChange(of: playlistsTabRefreshToken) { _, _ in
+            Task { await refreshPlaylists() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .peerTVPlaylistsNeedRefresh)) { _ in
+            Task { await refreshPlaylists() }
+        }
+    }
+
+    private func refreshPlaylists() async {
+        vm.configure(
+            apiClient: session.apiClient,
+            accountName: session.username.isEmpty ? nil : session.username
+        )
+        await vm.loadInitial()
+    }
+}
+
+private struct PlaylistsTabRefreshTokenKey: EnvironmentKey {
+    static let defaultValue: Int = 0
+}
+
+extension EnvironmentValues {
+    /// Incremented in `MainTabView` whenever the Playlists tab is selected.
+    var peerTVPlaylistsTabRefreshToken: Int {
+        get { self[PlaylistsTabRefreshTokenKey.self] }
+        set { self[PlaylistsTabRefreshTokenKey.self] = newValue }
     }
 }
 

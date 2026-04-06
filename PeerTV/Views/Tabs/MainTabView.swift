@@ -2,38 +2,75 @@ import SwiftUI
 
 struct MainTabView: View {
     @EnvironmentObject var session: SessionStore
+    @StateObject private var playlistEditCoordinator = PlaylistEditCoordinator()
     private let shuffleEnabled: Bool
+
+    @State private var selectedTab: MainTabSelection = .home
+    /// Bumped whenever the Playlists tab is selected so the list refetches (TabView often skips `onAppear` on return).
+    @State private var playlistsTabRefreshToken = 0
 
     init() {
         self.shuffleEnabled = DebugFlags.shuffleTabEnabled
     }
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             HomeTab()
-                .tabItem { Label("Home", systemImage: "flame") }
+                .tabItem { Label("Home", systemImage: "house") }
+                .tag(MainTabSelection.home)
 
             if shuffleEnabled {
                 ShuffleTab()
                     .tabItem { Label("Shuffle", systemImage: "shuffle") }
+                    .tag(MainTabSelection.shuffle)
             }
-            
-            SubscriptionsTab()
-                .tabItem { Label("Subscriptions", systemImage: "bell") }
-            
-            HistoryTab()
-                .tabItem { Label("History", systemImage: "clock") }
-            
+
             PlaylistsTab()
                 .tabItem { Label("Playlists", systemImage: "list.and.film") }
+                .tag(MainTabSelection.playlists)
+
+            HistoryTab()
+                .tabItem { Label("History", systemImage: "clock") }
+                .tag(MainTabSelection.history)
+
+            SubscriptionsTab()
+                .tabItem { Label("Subscriptions", systemImage: "bell") }
+                .tag(MainTabSelection.subscriptions)
 
             ChannelsTab()
                 .tabItem { Label("Channels", systemImage: "person.2") }
-            
+                .tag(MainTabSelection.channels)
+
             SettingsTab()
                 .tabItem { Label("Settings", systemImage: "gear") }
+                .tag(MainTabSelection.settings)
+        }
+        .environmentObject(playlistEditCoordinator)
+        .environment(\.peerTVPlaylistsTabRefreshToken, playlistsTabRefreshToken)
+        .overlay {
+            TabBarControllerFocusLock(locked: playlistEditCoordinator.isRepositioning)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+        }
+        .onChange(of: selectedTab) { _, newTab in
+            if playlistEditCoordinator.isRepositioning && newTab != .playlists {
+                selectedTab = .playlists
+            }
+            if newTab == .playlists {
+                playlistsTabRefreshToken += 1
+            }
         }
     }
+}
+
+private enum MainTabSelection: Hashable {
+    case home
+    case shuffle
+    case subscriptions
+    case history
+    case playlists
+    case channels
+    case settings
 }
 
 // MARK: - Shared navigation destinations
@@ -98,6 +135,7 @@ private struct SubscriptionsTab: View {
 
 private struct PlaylistsTab: View {
     @State private var path = NavigationPath()
+
     var body: some View {
         NavigationStack(path: $path) {
             PlaylistListView()

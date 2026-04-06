@@ -5,16 +5,44 @@ enum APIError: LocalizedError {
     case httpError(statusCode: Int, data: Data)
     case decodingError(Error)
     case unauthorized
+    case missingTwoFactor
     case unknown(Error)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "Invalid URL."
-        case .httpError(let code, _): return "HTTP error \(code)."
+        case .httpError(let code, let data):
+            if let desc = OAuthTokenError.parse(data)?.userMessage { return desc }
+            return "HTTP error \(code)."
         case .decodingError(let err): return "Decoding failed: \(err.localizedDescription)"
         case .unauthorized: return "Authentication required."
+        case .missingTwoFactor: return "Two-factor authentication code required."
         case .unknown(let err): return err.localizedDescription
         }
+    }
+}
+
+/// Structured representation of PeerTube's OAuth token error responses.
+struct OAuthTokenError {
+    let code: String?
+    let error: String?
+    let errorDescription: String?
+
+    var isMissingTwoFactor: Bool { code == "missing_two_factor" }
+
+    var userMessage: String? {
+        errorDescription ?? error
+    }
+
+    static func parse(_ data: Data) -> OAuthTokenError? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let code = json["code"] as? String
+        let error = json["error"] as? String
+        let desc = json["error_description"] as? String
+        guard code != nil || error != nil || desc != nil else { return nil }
+        return OAuthTokenError(code: code, error: error, errorDescription: desc)
     }
 }
 
@@ -80,12 +108,20 @@ final class PeerTubeAPIClient: @unchecked Sendable {
     }
 
     /// POST form-encoded body (used by OAuth token endpoint).
-    func postForm<T: Decodable>(_ endpoint: Endpoint, body: [String: String]) async throws -> T {
+    func postForm<T: Decodable>(
+        _ endpoint: Endpoint,
+        body: [String: String],
+        additionalHeaders: [String: String] = [:]
+    ) async throws -> T {
         let base = try await resolvedBaseURL()
         var urlRequest = try buildRequest(endpoint, base: base, skipAuth: true)
+        urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/x-www-form-urlencoded",
                             forHTTPHeaderField: "Content-Type")
+        for (key, value) in additionalHeaders {
+            urlRequest.setValue(value, forHTTPHeaderField: key)
+        }
         urlRequest.httpBody = body.urlEncodedData
         let (data, response) = try await session.data(for: urlRequest)
         guard let http = response as? HTTPURLResponse,
@@ -125,10 +161,20 @@ final class PeerTubeAPIClient: @unchecked Sendable {
         let items = endpoint.queryItems
         if !items.isEmpty { components?.queryItems = items }
         guard let url = components?.url else { throw APIError.invalidURL }
-        var request = URLRequest(url: url)
+        var request = URLRequest(
+            url: url,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: 60
+        )
         request.httpMethod = endpoint.method
         if !skipAuth, let token = tokenStore.accessToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if case .randomVideos = endpoint {
+            // PeerTube `random-video-tab` plugin expects these (see client/main.js).
+            let lgd = tokenStore.accessToken != nil ? "smack" : "hit"
+            request.setValue(lgd, forHTTPHeaderField: "lgd")
+            request.setValue("false", forHTTPHeaderField: "mobile")
         }
         if let body = endpoint.httpBody {
             request.httpBody = body

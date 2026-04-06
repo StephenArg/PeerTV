@@ -4,12 +4,18 @@ import Foundation
 final class LoginViewModel: ObservableObject {
     @Published var username = ""
     @Published var password = ""
+    @Published var otpCode = ""
+    @Published var needsOTP = false
     @Published var isLoading = false
     @Published var errorMessage: String?
 
     func login(using session: SessionStore) async {
         guard !username.isEmpty, !password.isEmpty else {
             errorMessage = "Enter both username and password."
+            return
+        }
+        if needsOTP && otpCode.trimmingCharacters(in: .whitespaces).isEmpty {
+            errorMessage = "Enter your authenticator code."
             return
         }
         guard let baseURL = session.baseURL else {
@@ -24,10 +30,19 @@ final class LoginViewModel: ObservableObject {
             let tokens = try await session.oauthService.login(
                 baseURL: baseURL,
                 username: username,
-                password: password
+                password: password,
+                otpCode: needsOTP ? otpCode : nil
             )
             session.didLogin(tokens: tokens, username: username)
         } catch let error as APIError {
+            if case .httpError(let code, let data) = error,
+               (code == 401 || code == 400),
+               let parsed = OAuthTokenError.parse(data),
+               parsed.isMissingTwoFactor {
+                needsOTP = true
+                errorMessage = nil
+                return
+            }
             errorMessage = error.errorDescription
         } catch {
             errorMessage = "Login failed: \(error.localizedDescription)"
