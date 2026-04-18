@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// API `sort` values for `GET /api/v1/videos` (see PeerTube REST docs).
 enum HomeVideoListSort: String, CaseIterable, Identifiable {
@@ -22,6 +23,8 @@ enum HomeVideoListSort: String, CaseIterable, Identifiable {
 
 @MainActor
 final class HomeViewModel: ObservableObject {
+    private static let log = Logger(subsystem: "com.peernext.PeerTV", category: "HomeViewModel")
+
     @Published var videos: [Video] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
@@ -34,6 +37,8 @@ final class HomeViewModel: ObservableObject {
     private var total: Int?
     private var apiClient: PeerTubeAPIClient?
     private var isAuthenticated = false
+    /// Broad privacy/`include` on global `/videos` — only for admin/moderator on most instances.
+    private var includeAllPrivacy = false
 
     init() {
         if let saved = UserDefaults.standard.string(forKey: Self.sortDefaultsKey),
@@ -48,9 +53,10 @@ final class HomeViewModel: ObservableObject {
         HomeVideoListSort(rawValue: sort) ?? .trending
     }
 
-    func configure(apiClient: PeerTubeAPIClient, isAuthenticated: Bool) {
+    func configure(apiClient: PeerTubeAPIClient, isAuthenticated: Bool, includeAllPrivacy: Bool) {
         self.apiClient = apiClient
         self.isAuthenticated = isAuthenticated
+        self.includeAllPrivacy = includeAllPrivacy
     }
 
     var canLoadMore: Bool {
@@ -64,6 +70,12 @@ final class HomeViewModel: ObservableObject {
         await loadMore()
     }
 
+    /// First load only — avoids wiping scroll position when the view reappears (e.g. after closing the player).
+    func loadInitialIfEmpty() async {
+        guard videos.isEmpty else { return }
+        await loadInitial()
+    }
+
     func loadMore() async {
         guard let apiClient, !isLoading, canLoadMore else { return }
         isLoading = true
@@ -71,8 +83,9 @@ final class HomeViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
+            // Normal users: omit broad filters (many instances 401). Admin/moderator: may use all privacies per API.
             let response: PaginatedResponse<Video> = try await apiClient.request(
-                .videos(sort: sort, start: currentStart, count: pageSize, includeAllPrivacy: isAuthenticated)
+                .videos(sort: sort, start: currentStart, count: pageSize, includeAllPrivacy: includeAllPrivacy)
             )
             total = response.total
             let existingIds = Set(videos.map(\.stableId))
@@ -80,6 +93,7 @@ final class HomeViewModel: ObservableObject {
             videos.append(contentsOf: unique)
             currentStart += response.items.count
         } catch {
+            Self.log.error("loadMore failed sort=\(self.sort, privacy: .public) authenticated=\(self.isAuthenticated) includeAllPrivacy=\(self.includeAllPrivacy) start=\(self.currentStart) error=\(error.localizedDescription, privacy: .public) underlying=\(String(describing: error), privacy: .public)")
             errorMessage = error.localizedDescription
         }
     }

@@ -1,6 +1,17 @@
 import UIKit
 import AVKit
 import SwiftUI
+import os
+
+private enum PlaybackLog {
+    static let log = Logger(subsystem: "com.peernext.PeerTV", category: "Playback")
+
+    static func describe(url: URL) -> String {
+        let path = url.path
+        let pathPreview = path.count > 120 ? String(path.prefix(120)) + "…" : path
+        return "\(url.scheme ?? "https")://\(url.host ?? "?")\(pathPreview)"
+    }
+}
 
 // MARK: - Playlist playback queue
 
@@ -34,6 +45,7 @@ final class PlayerPresenter {
         isPresenting = true
 
         guard let window = Self.keyWindow else {
+            PlaybackLog.log.error("play aborted: no key window videoId=\(videoId, privacy: .public)")
             isPresenting = false
             return
         }
@@ -52,24 +64,42 @@ final class PlayerPresenter {
         }
 
         showLoadingOverlay(on: window)
+        PlaybackLog.log.notice("loading video detail videoId=\(videoId, privacy: .public)")
 
         Task {
             do {
                 let data = try await apiClient.rawRequest(.videoDetail(id: videoId))
+                PlaybackLog.log.notice("videoDetail OK bytes=\(data.count) videoId=\(videoId, privacy: .public)")
                 let decoder = JSONDecoder()
                 decoder.keyDecodingStrategy = .convertFromSnakeCase
                 decoder.dateDecodingStrategy = .iso8601
                 let video = try decoder.decode(Video.self, from: data)
 
                 guard let url = video.hlsPlaylistURL ?? video.playbackURL else {
+                    PlaybackLog.log.error("no playback URL videoId=\(videoId, privacy: .public) \(video.playbackSourceSummary, privacy: .public)")
                     removeLoadingOverlay()
                     isPresenting = false
+                    Self.presentPlaybackAlert(
+                        title: "Couldn’t play video",
+                        message: "No streaming files were found for this video."
+                    )
                     return
                 }
 
+                let chosen = video.hlsPlaylistURL != nil ? "hlsPlaylist" : "fallback"
+                let isPrivatePath = url.path.contains("/private/")
+                PlaybackLog.log.notice("starting playback videoId=\(videoId, privacy: .public) source=\(chosen, privacy: .public) privatePath=\(isPrivatePath) url=\(Self.describePlaybackURL(url), privacy: .public) hasToken=\(accessToken != nil)")
+
+                let playURL = await Self.urlWithHLSTokenIfNeeded(
+                    url: url,
+                    videoId: videoId,
+                    apiClient: apiClient,
+                    accessToken: accessToken
+                )
+
                 removeLoadingOverlay()
                 presentPlayer(
-                    url: url,
+                    url: playURL,
                     resolutions: video.resolutionOptions,
                     accessToken: accessToken,
                     videoId: videoId,
@@ -78,10 +108,75 @@ final class PlayerPresenter {
                     isLocalDownload: false
                 )
             } catch {
+                PlaybackLog.log.error("videoDetail failed videoId=\(videoId, privacy: .public) \(error.localizedDescription, privacy: .public) \(String(describing: error), privacy: .public)")
                 removeLoadingOverlay()
                 isPresenting = false
+                Self.presentPlaybackAlert(
+                    title: "Couldn’t load video",
+                    message: error.localizedDescription
+                )
             }
         }
+    }
+
+    private static func describePlaybackURL(_ url: URL) -> String {
+        PlaybackLog.describe(url: url)
+    }
+
+    /// Private HLS needs `reinjectVideoFileToken`. Logged-in playback from object storage/CDN (cross-origin)
+    /// needs `videoFileToken` on the query — same idea as `DownloadManager` for direct files — and must not
+    /// rely on `Authorization: Bearer` to the storage host (S3 rejects it).
+    fileprivate static func urlWithHLSTokenIfNeeded(
+        url: URL,
+        videoId: String,
+        apiClient: PeerTubeAPIClient,
+        accessToken: String?
+    ) async -> URL {
+        guard url.pathExtension.lowercased() == "m3u8" else { return url }
+        let isPrivate = url.path.contains("/private/")
+        let instanceHost = await MainActor.run { apiClient.baseURL?.host?.lowercased() }
+        let playbackHost = url.host?.lowercased()
+        let isCrossOrigin: Bool = {
+            if let ih = instanceHost, let ph = playbackHost {
+                return ih != ph
+            }
+            return playbackHost != nil
+        }()
+        let isLoggedIn = accessToken.map { !$0.isEmpty } ?? false
+
+        let shouldFetchToken = isPrivate || (isLoggedIn && isCrossOrigin)
+        guard shouldFetchToken else { return url }
+
+        do {
+            let resp: VideoFileTokenResponse = try await apiClient.request(.videoFileToken(id: videoId))
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+            var items = components.queryItems ?? []
+            items.append(URLQueryItem(name: "videoFileToken", value: resp.files.token))
+            if isPrivate {
+                items.append(URLQueryItem(name: "reinjectVideoFileToken", value: "true"))
+            }
+            components.queryItems = items
+            if let withToken = components.url {
+                let label = isPrivate ? "private HLS" : "cross-origin HLS"
+                PlaybackLog.log.notice("\(label, privacy: .public): applied videoFileToken query videoId=\(videoId, privacy: .public)")
+                return withToken
+            }
+        } catch {
+            PlaybackLog.log.error("videoFileToken failed videoId=\(videoId, privacy: .public) \(error.localizedDescription, privacy: .public) — continuing with manifest URL")
+        }
+        return url
+    }
+
+    /// Presents a simple alert from the topmost view controller (works before/after player is shown).
+    private static func presentPlaybackAlert(title: String, message: String) {
+        guard let root = Self.keyWindow?.rootViewController else {
+            PlaybackLog.log.error("presentPlaybackAlert: no root VC")
+            return
+        }
+        let top = Self.topViewController(from: root)
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        top.present(alert, animated: true)
     }
 
     // MARK: - Player presentation
@@ -96,18 +191,24 @@ final class PlayerPresenter {
         isLocalDownload: Bool
     ) {
         guard let root = Self.keyWindow?.rootViewController else {
+            PlaybackLog.log.error("presentPlayer: no root VC videoId=\(videoId, privacy: .public)")
             isPresenting = false
             return
         }
 
         let presenter = Self.topViewController(from: root)
 
-        let asset = AVPlayerViewControllerRepresentable.makeAsset(url: url, token: accessToken)
+        let asset = AVPlayerViewControllerRepresentable.makeAsset(
+            url: url,
+            accessToken: accessToken,
+            instanceBaseURL: apiClient.baseURL
+        )
         let item = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: item)
 
         let playerVC = AVPlayerViewController()
         playerVC.player = player
+        playerVC.modalPresentationStyle = .fullScreen
 
         let coordinator = PlayerCoordinator(
             resolutions: resolutions,
@@ -118,7 +219,8 @@ final class PlayerPresenter {
             videoId: videoId,
             apiClient: apiClient,
             playlistQueue: playlistQueue,
-            isLocalDownload: isLocalDownload
+            isLocalDownload: isLocalDownload,
+            instanceBaseURL: apiClient.baseURL
         ) { [weak self] in
             self?.isPresenting = false
         }
@@ -131,6 +233,7 @@ final class PlayerPresenter {
         )
 
         presenter.present(playerVC, animated: true) {
+            PlaybackLog.log.notice("AVPlayerViewController on-screen videoId=\(videoId, privacy: .public)")
             player.play()
         }
     }
@@ -213,10 +316,13 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private let accessToken: String?
     private var videoId: String
     private let apiClient: PeerTubeAPIClient?
+    /// Snapshot from `apiClient.baseURL` at presentation time (avoids MainActor isolation in delegate methods).
+    private let instanceBaseURL: URL?
     private var playlistQueue: PlaylistPlaybackQueue?
     private var currentLabel: String = "Auto"
     private var currentSpeed: Float = 1.0
     private var statusObservation: NSKeyValueObservation?
+    private var initialLoadObservation: NSKeyValueObservation?
     private var loadingOverlay: UIView?
     private var isSwitching = false
     private var endObserver: Any?
@@ -231,6 +337,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
          videoId: String, apiClient: PeerTubeAPIClient?,
          playlistQueue: PlaylistPlaybackQueue?,
          isLocalDownload: Bool,
+         instanceBaseURL: URL?,
          onDismiss: @escaping () -> Void) {
         self.resolutions = resolutions
         self.autoURL = initialURL
@@ -239,6 +346,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         self.controller = controller
         self.videoId = videoId
         self.apiClient = apiClient
+        self.instanceBaseURL = instanceBaseURL
         self.playlistQueue = playlistQueue
         self.isLocalDownload = isLocalDownload
         self.onDismiss = onDismiss
@@ -254,11 +362,56 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
         reportCurrentTime()
         startProgressReporting()
+        observeInitialItemIfNeeded(player: player)
     }
 
     deinit {
+        initialLoadObservation?.invalidate()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let progressTimeObserver, let player { player.removeTimeObserver(progressTimeObserver) }
+    }
+
+    /// First-load only: logs AVFoundation errors (often missing from API-layer logs).
+    private func observeInitialItemIfNeeded(player: AVPlayer) {
+        guard let item = player.currentItem else {
+            PlaybackLog.log.error("AVPlayer has no currentItem videoId=\(self.videoId, privacy: .public)")
+            return
+        }
+        initialLoadObservation = item.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch item.status {
+                case .readyToPlay:
+                    PlaybackLog.log.notice("AVPlayerItem readyToPlay videoId=\(self.videoId, privacy: .public)")
+                    self.initialLoadObservation?.invalidate()
+                    self.initialLoadObservation = nil
+                case .failed:
+                    let err = item.error
+                    PlaybackLog.log.error("AVPlayerItem failed videoId=\(self.videoId, privacy: .public) \(err?.localizedDescription ?? "nil", privacy: .public) underlying=\(String(describing: err), privacy: .public)")
+                    if let ne = err as NSError? {
+                        PlaybackLog.log.error("NSError domain=\(ne.domain, privacy: .public) code=\(ne.code)")
+                    }
+                    self.initialLoadObservation?.invalidate()
+                    self.initialLoadObservation = nil
+                    let message = err?.localizedDescription ?? "The stream could not be opened."
+                    if let vc = self.controller {
+                        let alert = UIAlertController(title: "Playback failed", message: message, preferredStyle: .alert)
+                        alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+                            self?.controller?.dismiss(animated: true) {
+                                self?.performDismissCleanup()
+                            }
+                        })
+                        vc.present(alert, animated: true)
+                    } else {
+                        self.controller?.dismiss(animated: true) { [weak self] in
+                            self?.performDismissCleanup()
+                        }
+                    }
+                default:
+                    break
+                }
+            }
+        }
     }
 
     // MARK: - End of item / playlist autoplay
@@ -298,6 +451,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
         isSwitching = true
         player.pause()
+        initialLoadObservation?.invalidate()
+        initialLoadObservation = nil
         showLoadingOverlay(in: controller)
 
         do {
@@ -307,9 +462,16 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             decoder.dateDecodingStrategy = .iso8601
             let video = try decoder.decode(Video.self, from: data)
 
-            guard let url = video.hlsPlaylistURL ?? video.playbackURL else {
+            guard var url = video.hlsPlaylistURL ?? video.playbackURL else {
                 throw URLError(.badURL)
             }
+
+            url = await PlayerPresenter.urlWithHLSTokenIfNeeded(
+                url: url,
+                videoId: nextVideoId,
+                apiClient: nextQueue.apiClient,
+                accessToken: nextQueue.accessToken
+            )
 
             if let oldObs = endObserver {
                 NotificationCenter.default.removeObserver(oldObs)
@@ -324,7 +486,11 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             autoURL = url
             currentLabel = "Auto"
 
-            let asset = AVPlayerViewControllerRepresentable.makeAsset(url: url, token: nextQueue.accessToken)
+            let asset = AVPlayerViewControllerRepresentable.makeAsset(
+                url: url,
+                accessToken: nextQueue.accessToken,
+                instanceBaseURL: nextQueue.apiClient.baseURL
+            )
             let newItem = AVPlayerItem(asset: asset)
 
             if let obs = progressTimeObserver, let p = self.player {
@@ -364,6 +530,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                             }
                         }
                     } else if item.status == .failed {
+                        let err = item.error
+                        PlaybackLog.log.error("playlist item failed videoId=\(self.videoId, privacy: .public) \(err?.localizedDescription ?? "nil", privacy: .public)")
                         self.statusObservation?.invalidate()
                         self.statusObservation = nil
                         self.isSwitching = false
@@ -375,6 +543,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                 }
             }
         } catch {
+            PlaybackLog.log.error("playlist transition videoDetail failed videoId=\(nextVideoId, privacy: .public) \(error.localizedDescription, privacy: .public)")
             isSwitching = false
             removeLoadingOverlay()
             controller.dismiss(animated: true) { [weak self] in
@@ -482,8 +651,6 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         let seekTime = player.currentTime()
         let targetSpeed = currentSpeed
         let targetURL = option?.url ?? autoURL
-        let isPrivateHLS = targetURL.pathExtension.lowercased() == "m3u8"
-            && targetURL.path.contains("/private/")
 
         currentLabel = option?.label ?? "Auto"
         isSwitching = true
@@ -493,43 +660,48 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         player.pause()
         showLoadingOverlay(in: controller)
 
-        if isPrivateHLS, let apiClient {
+        if targetURL.pathExtension.lowercased() == "m3u8", let apiClient {
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                do {
-                    let resp: VideoFileTokenResponse = try await apiClient.request(.videoFileToken(id: self.videoId))
-                    var components = URLComponents(url: targetURL, resolvingAgainstBaseURL: false)!
-                    var items = components.queryItems ?? []
-                    items.append(URLQueryItem(name: "videoFileToken", value: resp.files.token))
-                    items.append(URLQueryItem(name: "reinjectVideoFileToken", value: "true"))
-                    components.queryItems = items
-                    let tokenizedURL = components.url ?? targetURL
-
-                    let asset = AVURLAsset(url: tokenizedURL)
-                    self.performAssetSwap(
-                        asset: asset, seekTime: seekTime, targetSpeed: targetSpeed,
-                        controller: controller
-                    )
-                } catch {
-                    self.isSwitching = false
-                    self.removeLoadingOverlay()
-                }
+                let withToken = await PlayerPresenter.urlWithHLSTokenIfNeeded(
+                    url: targetURL,
+                    videoId: self.videoId,
+                    apiClient: apiClient,
+                    accessToken: self.accessToken
+                )
+                let asset = AVPlayerViewControllerRepresentable.makeAsset(
+                    url: withToken,
+                    accessToken: self.accessToken,
+                    instanceBaseURL: self.instanceBaseURL
+                )
+                self.performAssetSwap(
+                    asset: asset, seekTime: seekTime, targetSpeed: targetSpeed,
+                    controller: controller
+                )
+                self.refreshMenus()
             }
+            refreshMenus()
         } else {
-            let asset = AVPlayerViewControllerRepresentable.makeAsset(url: targetURL, token: accessToken)
+            let asset = AVPlayerViewControllerRepresentable.makeAsset(
+                url: targetURL,
+                accessToken: accessToken,
+                instanceBaseURL: instanceBaseURL
+            )
             performAssetSwap(
                 asset: asset, seekTime: seekTime, targetSpeed: targetSpeed,
                 controller: controller
             )
+            refreshMenus()
         }
-
-        refreshMenus()
     }
 
     private func performAssetSwap(
         asset: AVURLAsset, seekTime: CMTime, targetSpeed: Float,
         controller: AVPlayerViewController
     ) {
+        initialLoadObservation?.invalidate()
+        initialLoadObservation = nil
+
         let newItem = AVPlayerItem(asset: asset)
 
         if let oldObs = endObserver {
@@ -576,6 +748,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                         }
                     }
                 } else if item.status == .failed {
+                    let err = item.error
+                    PlaybackLog.log.error("performAssetSwap item failed videoId=\(self.videoId, privacy: .public) \(err?.localizedDescription ?? "nil", privacy: .public)")
                     self.statusObservation?.invalidate()
                     self.statusObservation = nil
                     self.isSwitching = false
@@ -601,52 +775,9 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
     private func showLoadingOverlay(in controller: AVPlayerViewController) {
         removeLoadingOverlay(animated: false)
-        guard let overlayContainer = controller.contentOverlayView else { return }
-
-        let wrapper = UIView()
-        wrapper.translatesAutoresizingMaskIntoConstraints = false
-        wrapper.backgroundColor = .clear
-        overlayContainer.addSubview(wrapper)
-        NSLayoutConstraint.activate([
-            wrapper.topAnchor.constraint(equalTo: overlayContainer.topAnchor),
-            wrapper.bottomAnchor.constraint(equalTo: overlayContainer.bottomAnchor),
-            wrapper.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor),
-            wrapper.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor)
-        ])
-
-        if let snapshot = controller.view.snapshotView(afterScreenUpdates: false) {
-            snapshot.translatesAutoresizingMaskIntoConstraints = false
-            wrapper.addSubview(snapshot)
-            NSLayoutConstraint.activate([
-                snapshot.topAnchor.constraint(equalTo: wrapper.topAnchor),
-                snapshot.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor),
-                snapshot.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
-                snapshot.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor)
-            ])
+        PlayerLoadingOverlay.install(in: controller) { [weak self] wrapper in
+            self?.loadingOverlay = wrapper
         }
-
-        let scrim = UIView()
-        scrim.translatesAutoresizingMaskIntoConstraints = false
-        scrim.backgroundColor = UIColor.black.withAlphaComponent(0.35)
-        wrapper.addSubview(scrim)
-        NSLayoutConstraint.activate([
-            scrim.topAnchor.constraint(equalTo: wrapper.topAnchor),
-            scrim.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor),
-            scrim.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
-            scrim.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor)
-        ])
-
-        let spinner = UIActivityIndicatorView(style: .large)
-        spinner.color = .white
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-        spinner.startAnimating()
-        wrapper.addSubview(spinner)
-        NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: wrapper.centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor)
-        ])
-
-        loadingOverlay = wrapper
     }
 
     private func removeLoadingOverlay(animated: Bool = true) {

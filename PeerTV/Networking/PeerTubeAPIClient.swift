@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum APIError: LocalizedError {
     case invalidURL
@@ -50,6 +51,8 @@ struct OAuthTokenError {
 /// Thread-safety: baseURL is only mutated from @MainActor (SessionStore);
 /// all other mutable state lives in TokenStore which is already @unchecked Sendable.
 final class PeerTubeAPIClient: @unchecked Sendable {
+    private static let log = Logger(subsystem: "com.peernext.PeerTV", category: "PeerTubeAPI")
+
     @MainActor var baseURL: URL?
     private let tokenStore: TokenStore
     private let session: URLSession
@@ -81,27 +84,48 @@ final class PeerTubeAPIClient: @unchecked Sendable {
     func rawRequest(_ endpoint: Endpoint) async throws -> Data {
         let base = try await resolvedBaseURL()
         let urlRequest = try buildRequest(endpoint, base: base)
+        let host = base.host ?? base.absoluteString
         let (data, response) = try await session.data(for: urlRequest)
         guard let http = response as? HTTPURLResponse else {
             throw APIError.unknown(URLError(.badServerResponse))
         }
         if http.statusCode == 401 {
-            if let refreshed = try? await refreshToken(base: base) {
-                tokenStore.save(accessToken: refreshed.accessToken,
-                                refreshToken: refreshed.refreshToken)
-                var retry = try buildRequest(endpoint, base: base)
-                retry.setValue("Bearer \(refreshed.accessToken)",
-                               forHTTPHeaderField: "Authorization")
-                let (retryData, retryResp) = try await session.data(for: retry)
-                if let retryHttp = retryResp as? HTTPURLResponse,
-                   retryHttp.statusCode == 401 {
+            Self.log401(
+                endpoint: endpoint,
+                host: host,
+                data: data,
+                hasAccessToken: tokenStore.accessToken != nil,
+                hasRefreshToken: tokenStore.refreshToken != nil
+            )
+            let refreshed: OAuthTokenResponse
+            do {
+                refreshed = try await refreshToken(base: base)
+            } catch {
+                Self.log.error("OAuth refresh failed (original request was 401): \(String(describing: error), privacy: .public) localized=\(error.localizedDescription, privacy: .public)")
+                throw APIError.unauthorized
+            }
+            tokenStore.save(accessToken: refreshed.accessToken,
+                            refreshToken: refreshed.refreshToken)
+            Self.log.notice("OAuth refresh succeeded; retrying original request endpoint=\(endpoint.networkLogDescription, privacy: .public)")
+            var retry = try buildRequest(endpoint, base: base)
+            retry.setValue("Bearer \(refreshed.accessToken)",
+                           forHTTPHeaderField: "Authorization")
+            let (retryData, retryResp) = try await session.data(for: retry)
+            if let retryHttp = retryResp as? HTTPURLResponse {
+                Self.log.notice("After refresh retry status=\(retryHttp.statusCode) endpoint=\(endpoint.networkLogDescription, privacy: .public)")
+                if retryHttp.statusCode == 401 {
+                    Self.log.error("After refresh retry still 401 — token rejected or endpoint requires different auth endpoint=\(endpoint.networkLogDescription, privacy: .public)")
                     throw APIError.unauthorized
                 }
-                return retryData
+            } else {
+                Self.log.error("After refresh retry missing HTTPURLResponse endpoint=\(endpoint.networkLogDescription, privacy: .public)")
             }
-            throw APIError.unauthorized
+            return retryData
         }
         guard (200..<300).contains(http.statusCode) else {
+            if http.statusCode == 403 {
+                Self.log.notice("HTTP 403 (forbidden) endpoint=\(endpoint.networkLogDescription, privacy: .public) host=\(host, privacy: .public) bodyPreview=\(Self.truncateForLog(data), privacy: .public)")
+            }
             throw APIError.httpError(statusCode: http.statusCode, data: data)
         }
         return data
@@ -127,6 +151,11 @@ final class PeerTubeAPIClient: @unchecked Sendable {
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let host = base.host ?? base.absoluteString
+            Self.log.error("postForm non-success status=\(code) endpoint=\(endpoint.networkLogDescription, privacy: .public) host=\(host, privacy: .public) bodyPreview=\(Self.truncateForLog(data), privacy: .public)")
+            if let oauth = OAuthTokenError.parse(data) {
+                Self.log.error("postForm OAuth error code=\(oauth.code ?? "nil", privacy: .public) error=\(oauth.error ?? "nil", privacy: .public) desc=\(oauth.errorDescription ?? "nil", privacy: .public)")
+            }
             throw APIError.httpError(statusCode: code, data: data)
         }
         do {
@@ -184,7 +213,12 @@ final class PeerTubeAPIClient: @unchecked Sendable {
     }
 
     private func refreshToken(base: URL) async throws -> OAuthTokenResponse {
-        guard let refresh = tokenStore.refreshToken else { throw APIError.unauthorized }
+        let host = base.host ?? base.absoluteString
+        Self.log.notice("refreshToken() starting host=\(host, privacy: .public) refreshTokenPresent=\(self.tokenStore.refreshToken != nil)")
+        guard let refresh = tokenStore.refreshToken else {
+            Self.log.error("refreshToken() aborted: no refresh token in keychain")
+            throw APIError.unauthorized
+        }
         let oauthClient: OAuthClientResponse = try await request(.oauthClientsLocal)
         let body: [String: String] = [
             "client_id": oauthClient.clientId,
@@ -192,7 +226,34 @@ final class PeerTubeAPIClient: @unchecked Sendable {
             "grant_type": "refresh_token",
             "refresh_token": refresh
         ]
-        return try await postForm(.usersToken, body: body)
+        do {
+            let tokens: OAuthTokenResponse = try await postForm(.usersToken, body: body)
+            Self.log.notice("refreshToken() POST /users/token decoded OK host=\(host, privacy: .public)")
+            return tokens
+        } catch {
+            Self.log.error("refreshToken() POST /users/token failed: \(String(describing: error), privacy: .public)")
+            throw error
+        }
+    }
+
+    private static func log401(
+        endpoint: Endpoint,
+        host: String,
+        data: Data,
+        hasAccessToken: Bool,
+        hasRefreshToken: Bool
+    ) {
+        Self.log.notice("HTTP 401 host=\(host, privacy: .public) endpoint=\(endpoint.networkLogDescription, privacy: .public) accessTokenPresent=\(hasAccessToken) refreshTokenPresent=\(hasRefreshToken) bodyPreview=\(truncateForLog(data), privacy: .public)")
+        if let oauth = OAuthTokenError.parse(data) {
+            Self.log.error("401 response OAuth fields code=\(oauth.code ?? "nil", privacy: .public) error=\(oauth.error ?? "nil", privacy: .public) desc=\(oauth.errorDescription ?? "nil", privacy: .public)")
+        }
+    }
+
+    private static func truncateForLog(_ data: Data, maxChars: Int = 512) -> String {
+        guard !data.isEmpty else { return "<empty>" }
+        let s = String(data: data, encoding: .utf8) ?? "<non-utf8 \(data.count) bytes>"
+        if s.count <= maxChars { return s }
+        return String(s.prefix(maxChars)) + "… (total \(data.count) bytes)"
     }
 }
 

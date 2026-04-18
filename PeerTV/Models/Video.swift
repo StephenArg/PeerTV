@@ -84,6 +84,17 @@ struct Video: Decodable, Identifiable, Hashable {
         return nil
     }
 
+    /// Summary for diagnostics when playback URL resolution fails (no secrets).
+    var playbackSourceSummary: String {
+        let spCount = streamingPlaylists?.count ?? 0
+        let first = streamingPlaylists?.first
+        let hasPlaylistUrl = first?.playlistUrl != nil
+        let hlsFileCount = first?.files?.count ?? 0
+        let webFileCount = files?.count ?? 0
+        let pid = privacy?.id.map(String.init) ?? "nil"
+        return "streamingPlaylists=\(spCount) hasPlaylistUrl=\(hasPlaylistUrl) hlsFiles=\(hlsFileCount) webFiles=\(webFileCount) privacy=\(pid)"
+    }
+
     var formattedDuration: String {
         guard let d = duration, d > 0 else { return "" }
         let h = d / 3600

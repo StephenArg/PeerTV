@@ -8,85 +8,107 @@ struct VideoGridView: View {
     @State private var showSearch = false
     @State private var showSortDialog = false
     @State private var didLongPress = false
+    /// False when another tab is selected so we do not scroll/focus the home grid when the player dismisses from elsewhere.
+    @State private var isHomeGridOnScreen = false
+    @FocusState private var homeGridFocusVideoId: String?
 
     private let columns = [
         GridItem(.adaptive(minimum: 380, maximum: 480), spacing: 30)
     ]
 
+    private func homeCellScrollId(videoId: String) -> String {
+        "homeCell-\(videoId)"
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 30) {
-                HStack {
-                    Text(vm.currentListSort.displayName)
-                        .font(.title3)
-                        .bold()
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 30) {
+                    HStack {
+                        Text(vm.currentListSort.displayName)
+                            .font(.title3)
+                            .bold()
 
-                    HStack(spacing: 35) {
-                        Button {
-                            showSearch = true
-                        } label: {
-                            HStack(spacing: 20) {
-                                Image(systemName: "magnifyingglass")
-                                Text("Search")
-                            }
-                            .font(.callout)
-                            .padding(.horizontal, 48)
-                            .padding(.vertical, 12)
-                        }
-                        .buttonStyle(.card)
-
-                        Button {
-                            showSortDialog = true
-                        } label: {
-                            HStack(spacing: 20) {
-                                Image(systemName: "arrow.up.arrow.down.circle")
-                                Text("Sort")
-                            }
-                            .font(.callout)
-                            .padding(.horizontal, 48)
-                            .padding(.vertical, 12)
-                        }
-                        .buttonStyle(.card)
-                    }
-                }
-                .padding(.horizontal, 50)
-
-                LazyVGrid(columns: columns, spacing: 50) {
-                    ForEach(vm.videos, id: \.stableId) { video in
-                        Button {
-                            if didLongPress { didLongPress = false; return }
-                            PlayerPresenter.shared.play(
-                                videoId: video.stableId,
-                                apiClient: session.apiClient,
-                                accessToken: session.tokenStore.accessToken
-                            )
-                        } label: {
-                            VideoCardView(video: video)
-                        }
-                        .buttonStyle(.card)
-                        .simultaneousGesture(
-                            LongPressGesture(minimumDuration: 0.5)
-                                .onEnded { _ in
-                                    didLongPress = true
-                                    detailVideoId = video.stableId
-                                    showDetail = true
+                        HStack(spacing: 35) {
+                            Button {
+                                showSearch = true
+                            } label: {
+                                HStack(spacing: 20) {
+                                    Image(systemName: "magnifyingglass")
+                                    Text("Search")
                                 }
-                        )
-                        .onAppear {
-                            if video.stableId == vm.videos.last?.stableId {
-                                Task { await vm.loadMore() }
+                                .font(.callout)
+                                .padding(.horizontal, 48)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.card)
+
+                            Button {
+                                showSortDialog = true
+                            } label: {
+                                HStack(spacing: 20) {
+                                    Image(systemName: "arrow.up.arrow.down.circle")
+                                    Text("Sort")
+                                }
+                                .font(.callout)
+                                .padding(.horizontal, 48)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.card)
+                        }
+                    }
+                    .padding(.horizontal, 50)
+
+                    LazyVGrid(columns: columns, spacing: 50) {
+                        ForEach(vm.videos, id: \.stableId) { video in
+                            Button {
+                                if didLongPress { didLongPress = false; return }
+                                PlayerPresenter.shared.play(
+                                    videoId: video.stableId,
+                                    apiClient: session.apiClient,
+                                    accessToken: session.tokenStore.accessToken
+                                )
+                            } label: {
+                                VideoCardView(video: video)
+                            }
+                            .buttonStyle(.card)
+                            .focused($homeGridFocusVideoId, equals: video.stableId)
+                            .id(homeCellScrollId(videoId: video.stableId))
+                            .simultaneousGesture(
+                                LongPressGesture(minimumDuration: 0.5)
+                                    .onEnded { _ in
+                                        didLongPress = true
+                                        detailVideoId = video.stableId
+                                        showDetail = true
+                                    }
+                            )
+                            .onAppear {
+                                if video.stableId == vm.videos.last?.stableId {
+                                    Task { await vm.loadMore() }
+                                }
                             }
                         }
                     }
+                    .padding(.horizontal, 50)
                 }
-                .padding(.horizontal, 50)
-            }
-            .padding(.top, 40)
-            .padding(.bottom, 60)
+                .padding(.top, 40)
+                .padding(.bottom, 60)
 
-            if vm.isLoading {
-                ProgressView()
-                    .padding()
+                if vm.isLoading {
+                    ProgressView()
+                        .padding()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .peerTVPlayerDismissed)) { note in
+                guard isHomeGridOnScreen else { return }
+                guard let id = note.userInfo?["videoId"] as? String else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                    homeGridFocusVideoId = id
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        scrollProxy.scrollTo(homeCellScrollId(videoId: id), anchor: .center)
+                    }
+                }
             }
         }
         .overlay {
@@ -112,9 +134,23 @@ struct VideoGridView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .onAppear { isHomeGridOnScreen = true }
+        .onDisappear { isHomeGridOnScreen = false }
         .task {
-            vm.configure(apiClient: session.apiClient, isAuthenticated: session.phase == .authenticated)
-            await vm.loadInitial()
+            vm.configure(
+                apiClient: session.apiClient,
+                isAuthenticated: session.phase == .authenticated,
+                includeAllPrivacy: session.useBroadHomeVideoListing
+            )
+            await vm.loadInitialIfEmpty()
+        }
+        .onChange(of: session.useBroadHomeVideoListing) { _, _ in
+            vm.configure(
+                apiClient: session.apiClient,
+                isAuthenticated: session.phase == .authenticated,
+                includeAllPrivacy: session.useBroadHomeVideoListing
+            )
+            Task { await vm.loadInitial() }
         }
     }
 }

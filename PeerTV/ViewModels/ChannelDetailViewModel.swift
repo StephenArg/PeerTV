@@ -47,8 +47,9 @@ final class ChannelDetailViewModel: ObservableObject {
 
         do {
             channel = try await apiClient.request(.channelDetail(handle: handle))
+            let includeAllPrivacyForListing = isOwnChannel && isAuthenticated
             async let vids: PaginatedResponse<Video> = apiClient.request(
-                .channelVideos(handle: handle, start: 0, count: pageSize, sort: "-publishedAt", includeAllPrivacy: isAuthenticated)
+                .channelVideos(handle: handle, start: 0, count: pageSize, sort: "-publishedAt", includeAllPrivacy: includeAllPrivacyForListing)
             )
             async let pls: PaginatedResponse<VideoPlaylist> = apiClient.request(
                 .channelPlaylists(handle: handle, start: 0, count: pageSize)
@@ -69,8 +70,9 @@ final class ChannelDetailViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
+            let includeAllPrivacyForListing = isOwnChannel && isAuthenticated
             let resp: PaginatedResponse<Video> = try await apiClient.request(
-                .channelVideos(handle: handle, start: videosStart, count: pageSize, sort: "-publishedAt", includeAllPrivacy: isAuthenticated)
+                .channelVideos(handle: handle, start: videosStart, count: pageSize, sort: "-publishedAt", includeAllPrivacy: includeAllPrivacyForListing)
             )
             let existingIds = Set(videos.map(\.stableId))
             let unique = resp.items.filter { !existingIds.contains($0.stableId) }

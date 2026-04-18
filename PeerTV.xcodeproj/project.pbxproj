@@ -49,6 +49,7 @@
 		D465A444AB99F93D4FBC639D /* ThumbnailURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08E2476F69BB53E8D572601B /* ThumbnailURL.swift */; };
 		DBF17753E6C492D03CEFBDF6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 487CD46A4F75DFE6C3DE79FD /* Assets.xcassets */; };
 		DD11223344556677AABB0001 /* PlayerLoaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD11223344556677AABB0002 /* PlayerLoaderView.swift */; };
+		PP11223344556677AABB0001 /* PlayerLoadingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = PP11223344556677AABB0002 /* PlayerLoadingOverlay.swift */; };
 		DD22001122334455AA66BB02 /* DownloadedVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD22001122334455AA66BB01 /* DownloadedVideo.swift */; };
 		DD33001122334455AA66BB02 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD33001122334455AA66BB01 /* DownloadManager.swift */; };
 		DD44001122334455AA66BB02 /* VideoDownloadBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD44001122334455AA66BB01 /* VideoDownloadBar.swift */; };
@@ -111,6 +112,7 @@
 		D6BA5EF17722A7D480F817B6 /* TokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenStore.swift; sourceTree = "<group>"; };
 		DD0AE8B22B3501976B57C409 /* LoginViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginViewModel.swift; sourceTree = "<group>"; };
 		DD11223344556677AABB0002 /* PlayerLoaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerLoaderView.swift; sourceTree = "<group>"; };
+		PP11223344556677AABB0002 /* PlayerLoadingOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerLoadingOverlay.swift; sourceTree = "<group>"; };
 		DD22001122334455AA66BB01 /* DownloadedVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadedVideo.swift; sourceTree = "<group>"; };
 		DD33001122334455AA66BB01 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
 		DD44001122334455AA66BB01 /* VideoDownloadBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDownloadBar.swift; sourceTree = "<group>"; };
@@ -215,6 +217,7 @@
 			children = (
 				FD930FB67E78919F51B313DD /* PlayerView.swift */,
 				DD11223344556677AABB0002 /* PlayerLoaderView.swift */,
+				PP11223344556677AABB0002 /* PlayerLoadingOverlay.swift */,
 			);
 			path = Player;
 			sourceTree = "<group>";
@@ -432,6 +435,7 @@
 				33897146F13A8BB646E04D1F /* LoginView.swift in Sources */,
 				26F3E2262AB6C7BEBF2CDF21 /* PlayerView.swift in Sources */,
 				DD11223344556677AABB0001 /* PlayerLoaderView.swift in Sources */,
+				PP11223344556677AABB0001 /* PlayerLoadingOverlay.swift in Sources */,
 				F73A4ACEDD46711AA66A840C /* SettingsView.swift in Sources */,
 				DD55001122334455AA66BB02 /* DownloadedVideosView.swift in Sources */,
 				563EC8FE6C62B36776184138 /* ChannelsListView.swift in Sources */,

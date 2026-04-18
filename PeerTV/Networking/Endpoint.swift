@@ -228,3 +228,26 @@ enum Endpoint {
         ]
     }
 }
+
+// MARK: - Diagnostics (no secrets)
+
+extension Endpoint {
+    /// Short label for Unified Logging (paths + non-sensitive parameters only).
+    var networkLogDescription: String {
+        switch self {
+        case .videos(let sort, let start, let count, let includeAllPrivacy):
+            return "GET /api/v1/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy)"
+        case .channelVideos(let handle, let start, let count, let sort, let includeAllPrivacy):
+            return "GET …/video-channels/\(handle)/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy)"
+        case .searchVideos(let search, let start, let count):
+            let q = String(search.prefix(64))
+            return "GET /api/v1/search/videos q=\(q) start=\(start) count=\(count)"
+        case .subscriptionExist(let uri):
+            return "GET …/subscriptions/exist uri=\(String(uri.prefix(120)))"
+        case .subscribe(let uri):
+            return "POST …/subscriptions uri=\(String(uri.prefix(120)))"
+        default:
+            return "\(method) \(path)"
+        }
+    }
+}

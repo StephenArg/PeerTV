@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import AVKit
 
 struct PlayerView: View {
@@ -34,7 +35,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
-        let asset = Self.makeAsset(url: url, token: accessToken)
+        let asset = Self.makeAsset(url: url, accessToken: accessToken, instanceBaseURL: nil)
         let item = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: item)
         controller.player = player
@@ -58,13 +59,24 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
         )
     }
 
-    static func makeAsset(url: URL, token: String?) -> AVURLAsset {
-        guard let token, !token.isEmpty else {
+    /// Bearer is only attached for URLs on the PeerTube instance host. Object storage / CDNs
+    /// often reject `Authorization: Bearer` (e.g. S3 expects SigV4), which breaks HLS.
+    static func makeAsset(url: URL, accessToken: String?, instanceBaseURL: URL?) -> AVURLAsset {
+        let bearer = Self.bearerTokenForPlayback(url: url, accessToken: accessToken, instanceBaseURL: instanceBaseURL)
+        guard let bearer, !bearer.isEmpty else {
             return AVURLAsset(url: url)
         }
         return AVURLAsset(url: url, options: [
-            "AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(token)"]
+            "AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(bearer)"]
         ])
+    }
+
+    /// When `instanceBaseURL` is nil, Bearer is sent whenever `accessToken` is set (legacy behavior).
+    static func bearerTokenForPlayback(url: URL, accessToken: String?, instanceBaseURL: URL?) -> String? {
+        guard let accessToken, !accessToken.isEmpty else { return nil }
+        guard let baseHost = instanceBaseURL?.host?.lowercased() else { return accessToken }
+        guard let playbackHost = url.host?.lowercased() else { return accessToken }
+        return playbackHost == baseHost ? accessToken : nil
     }
 
     // MARK: - Coordinator
@@ -181,7 +193,11 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
             player.pause()
             showLoadingOverlay(in: controller)
 
-            let asset = AVPlayerViewControllerRepresentable.makeAsset(url: targetURL, token: accessToken)
+            let asset = AVPlayerViewControllerRepresentable.makeAsset(
+                url: targetURL,
+                accessToken: accessToken,
+                instanceBaseURL: nil
+            )
             let newItem = AVPlayerItem(asset: asset)
             player.replaceCurrentItem(with: newItem)
 
@@ -230,53 +246,9 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
 
         private func showLoadingOverlay(in controller: AVPlayerViewController) {
             removeLoadingOverlay(animated: false)
-
-            guard let overlayContainer = controller.contentOverlayView else { return }
-
-            let wrapper = UIView()
-            wrapper.translatesAutoresizingMaskIntoConstraints = false
-            wrapper.backgroundColor = .clear
-            overlayContainer.addSubview(wrapper)
-            NSLayoutConstraint.activate([
-                wrapper.topAnchor.constraint(equalTo: overlayContainer.topAnchor),
-                wrapper.bottomAnchor.constraint(equalTo: overlayContainer.bottomAnchor),
-                wrapper.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor),
-                wrapper.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor)
-            ])
-
-            if let snapshot = controller.view.snapshotView(afterScreenUpdates: false) {
-                snapshot.translatesAutoresizingMaskIntoConstraints = false
-                wrapper.addSubview(snapshot)
-                NSLayoutConstraint.activate([
-                    snapshot.topAnchor.constraint(equalTo: wrapper.topAnchor),
-                    snapshot.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor),
-                    snapshot.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
-                    snapshot.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor)
-                ])
+            PlayerLoadingOverlay.install(in: controller) { [weak self] wrapper in
+                self?.loadingOverlay = wrapper
             }
-
-            let scrim = UIView()
-            scrim.translatesAutoresizingMaskIntoConstraints = false
-            scrim.backgroundColor = UIColor.black.withAlphaComponent(0.35)
-            wrapper.addSubview(scrim)
-            NSLayoutConstraint.activate([
-                scrim.topAnchor.constraint(equalTo: wrapper.topAnchor),
-                scrim.bottomAnchor.constraint(equalTo: wrapper.bottomAnchor),
-                scrim.leadingAnchor.constraint(equalTo: wrapper.leadingAnchor),
-                scrim.trailingAnchor.constraint(equalTo: wrapper.trailingAnchor)
-            ])
-
-            let spinner = UIActivityIndicatorView(style: .large)
-            spinner.color = .white
-            spinner.translatesAutoresizingMaskIntoConstraints = false
-            spinner.startAnimating()
-            wrapper.addSubview(spinner)
-            NSLayoutConstraint.activate([
-                spinner.centerXAnchor.constraint(equalTo: wrapper.centerXAnchor),
-                spinner.centerYAnchor.constraint(equalTo: wrapper.centerYAnchor)
-            ])
-
-            loadingOverlay = wrapper
         }
 
         private func removeLoadingOverlay(animated: Bool = true) {

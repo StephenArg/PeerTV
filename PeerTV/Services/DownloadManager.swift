@@ -354,7 +354,11 @@ final class DownloadManager: NSObject, ObservableObject {
 
     private func performHLSExport(url: URL, meta: PendingDownloadMeta, accessToken: String?) {
         let videoId = meta.videoId
-        let asset = AVPlayerViewControllerRepresentable.makeAsset(url: url, token: accessToken)
+        let asset = AVPlayerViewControllerRepresentable.makeAsset(
+            url: url,
+            accessToken: accessToken,
+            instanceBaseURL: meta.apiClient?.baseURL
+        )
 
         Task {
             do {
