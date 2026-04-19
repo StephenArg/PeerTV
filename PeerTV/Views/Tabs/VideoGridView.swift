@@ -7,6 +7,7 @@ struct VideoGridView: View {
     @State private var showDetail = false
     @State private var showSearch = false
     @State private var showSortDialog = false
+    @State private var showScopeDialog = false
     @State private var didLongPress = false
     /// False when another tab is selected so we do not scroll/focus the home grid when the player dismisses from elsewhere.
     @State private var isHomeGridOnScreen = false
@@ -49,6 +50,19 @@ struct VideoGridView: View {
                                 HStack(spacing: 20) {
                                     Image(systemName: "arrow.up.arrow.down.circle")
                                     Text("Sort")
+                                }
+                                .font(.callout)
+                                .padding(.horizontal, 48)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.card)
+
+                            Button {
+                                showScopeDialog = true
+                            } label: {
+                                HStack(spacing: 20) {
+                                    Image(systemName: "globe")
+                                    Text("Platforms")
                                 }
                                 .font(.callout)
                                 .padding(.horizontal, 48)
@@ -130,6 +144,18 @@ struct VideoGridView: View {
             ForEach(HomeVideoListSort.dialogOrder) { option in
                 Button(option == vm.currentListSort ? "\(option.displayName) ✓" : option.displayName) {
                     Task { await vm.applyListSort(option) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "Show videos from",
+            isPresented: $showScopeDialog,
+            titleVisibility: .visible
+        ) {
+            ForEach(HomeVideoScope.dialogOrder) { option in
+                Button(option == vm.currentListScope ? "\(option.displayName) ✓" : option.displayName) {
+                    Task { await vm.applyListScope(option) }
                 }
             }
             Button("Cancel", role: .cancel) {}

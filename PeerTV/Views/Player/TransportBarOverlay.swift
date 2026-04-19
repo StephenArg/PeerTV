@@ -21,7 +21,7 @@ private enum TransportBarMetrics {
     static let labelSpacing: CGFloat = 16
     static let buttonRowSpacing: CGFloat = 14
     static let titleSpacing: CGFloat = 12
-    static let autoHideDelay: TimeInterval = 3
+    static let autoHideDelay: TimeInterval = 5
     static let skipSeconds: Double = 10
     /// Press duration that separates a "tap" (skip) from a "hold" (enter skim mode).
     static let holdBeforeSkim: TimeInterval = 0.5
@@ -157,6 +157,14 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
         pan.cancelsTouchesInView = false
         pan.delegate = self
         addGestureRecognizer(pan)
+
+        // A light tap on the Siri Remote touchpad arrives as an indirect `UITouch`, not a
+        // `.select` press (which is a physical click). Listen for it explicitly so the user can
+        // wake the bar by just brushing the touchpad, mirroring the native player.
+        let wakeTap = UITapGestureRecognizer(target: self, action: #selector(handleWakeTap(_:)))
+        wakeTap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+        wakeTap.cancelsTouchesInView = false
+        addGestureRecognizer(wakeTap)
     }
 
     /// Only recognize the pan gesture when the motion is primarily horizontal; that way vertical
@@ -175,6 +183,12 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         let focused = context.nextFocusedView === self
+        // When focus arrives at the scrubber from elsewhere (typically the Quality / Speed
+        // buttons), reset the auto-hide timer so the user gets the full delay window instead of
+        // whatever fragment was left over from the previous schedule.
+        if focused && context.previouslyFocusedView !== self {
+            onActivity?()
+        }
         coordinator.addCoordinatedAnimations { [weak self] in
             guard let self else { return }
             let h = focused ? TransportBarMetrics.focusedTrackHeight : TransportBarMetrics.trackHeight
@@ -240,6 +254,10 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
             }
         }
         super.pressesCancelled(presses, with: event)
+    }
+
+    @objc private func handleWakeTap(_ gr: UITapGestureRecognizer) {
+        onActivity?()
     }
 
     @objc private func handlePan(_ gr: UIPanGestureRecognizer) {
@@ -982,12 +1000,27 @@ final class TransportBarController: NSObject {
             if player.timeControlStatus == .paused { return }
             if case .skimming = self.skimPhase { return }
             if self.pendingScrubCommit { return }
+            // If the user has navigated up to the Quality / Speed buttons, keep the bar visible
+            // and push the hide out — they're still engaged with the overlay. When focus
+            // eventually returns to the scrubber, `FocusableTrackControl.didUpdateFocus` resets
+            // the timer to a full `autoHideDelay` window.
+            if self.isChromeButtonFocused {
+                self.scheduleAutoHideIfNeeded()
+                return
+            }
             self.rootView.setBarVisible(false, animated: true) {
                 self.requestFocusOnBar()
             }
         }
         hideWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + TransportBarMetrics.autoHideDelay, execute: work)
+    }
+
+    /// `true` when the Quality or Speed button currently owns focus. Used by the auto-hide timer
+    /// and `scheduleAutoHideIfNeeded` to suppress hiding while the user is interacting with the
+    /// chrome buttons above the scrubber.
+    private var isChromeButtonFocused: Bool {
+        rootView.barView.qualityButton.isFocused || rootView.barView.speedButton.isFocused
     }
 
     // MARK: - Actions (buttons / gestures / arrows)

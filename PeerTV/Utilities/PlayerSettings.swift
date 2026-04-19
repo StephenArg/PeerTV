@@ -56,7 +56,7 @@ enum DefaultResolution: Int, CaseIterable, Identifiable {
         case .p360: return "360p"
         case .p480: return "480p"
         case .p720: return "720p"
-        case .p1080: return "1080p (Full HD)"
+        case .p1080: return "1080p (HD)"
         case .p1440: return "1440p (2K)"
         case .p2160: return "2160p (4K)"
         }

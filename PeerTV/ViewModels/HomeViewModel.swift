@@ -21,6 +21,36 @@ enum HomeVideoListSort: String, CaseIterable, Identifiable {
     static let dialogOrder: [HomeVideoListSort] = [.recentlyAdded, .name, .trending]
 }
 
+/// Selects which set of videos the home grid fetches from `GET /api/v1/videos`.
+///
+/// - `all`: omit the `isLocal` query parameter entirely — PeerTube returns the union of this
+///   instance's videos and federated content (default behavior).
+/// - `local`: request `isLocal=true` — only videos hosted on the currently connected instance.
+enum HomeVideoScope: String, CaseIterable, Identifiable {
+    case all
+    case local
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .all: "All platforms"
+        case .local: "This server only"
+        }
+    }
+
+    /// Maps to the API's `isLocal` query value. `nil` means "don't send the parameter".
+    var isLocal: Bool? {
+        switch self {
+        case .all: nil
+        case .local: true
+        }
+    }
+
+    /// Order shown in the home platforms dialog.
+    static let dialogOrder: [HomeVideoScope] = [.all, .local]
+}
+
 @MainActor
 final class HomeViewModel: ObservableObject {
     private static let log = Logger(subsystem: "com.peernext.PeerTV", category: "HomeViewModel")
@@ -29,8 +59,10 @@ final class HomeViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var sort: String
+    @Published var scope: String
 
     private static let sortDefaultsKey = "PeerTV.homeVideoSort"
+    private static let scopeDefaultsKey = "PeerTV.homeVideoScope"
 
     private let pageSize = 15
     private var currentStart = 0
@@ -47,10 +79,20 @@ final class HomeViewModel: ObservableObject {
         } else {
             sort = HomeVideoListSort.trending.rawValue
         }
+        if let saved = UserDefaults.standard.string(forKey: Self.scopeDefaultsKey),
+           HomeVideoScope(rawValue: saved) != nil {
+            scope = saved
+        } else {
+            scope = HomeVideoScope.all.rawValue
+        }
     }
 
     var currentListSort: HomeVideoListSort {
         HomeVideoListSort(rawValue: sort) ?? .trending
+    }
+
+    var currentListScope: HomeVideoScope {
+        HomeVideoScope(rawValue: scope) ?? .all
     }
 
     func configure(apiClient: PeerTubeAPIClient, isAuthenticated: Bool, includeAllPrivacy: Bool) {
@@ -85,7 +127,13 @@ final class HomeViewModel: ObservableObject {
         do {
             // Normal users: omit broad filters (many instances 401). Admin/moderator: may use all privacies per API.
             let response: PaginatedResponse<Video> = try await apiClient.request(
-                .videos(sort: sort, start: currentStart, count: pageSize, includeAllPrivacy: includeAllPrivacy)
+                .videos(
+                    sort: sort,
+                    start: currentStart,
+                    count: pageSize,
+                    includeAllPrivacy: includeAllPrivacy,
+                    isLocal: currentListScope.isLocal
+                )
             )
             total = response.total
             let existingIds = Set(videos.map(\.stableId))
@@ -102,6 +150,13 @@ final class HomeViewModel: ObservableObject {
         guard sort != option.rawValue else { return }
         sort = option.rawValue
         UserDefaults.standard.set(option.rawValue, forKey: Self.sortDefaultsKey)
+        await loadInitial()
+    }
+
+    func applyListScope(_ option: HomeVideoScope) async {
+        guard scope != option.rawValue else { return }
+        scope = option.rawValue
+        UserDefaults.standard.set(option.rawValue, forKey: Self.scopeDefaultsKey)
         await loadInitial()
     }
 }

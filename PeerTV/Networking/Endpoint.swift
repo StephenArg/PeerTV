@@ -10,7 +10,7 @@ enum Endpoint {
     case usersToken
 
     // Videos
-    case videos(sort: String, start: Int, count: Int, includeAllPrivacy: Bool = false)
+    case videos(sort: String, start: Int, count: Int, includeAllPrivacy: Bool = false, isLocal: Bool? = nil)
     case videoDetail(id: String)
     case videoFileToken(id: String)
     case videoStoryboards(id: String)
@@ -127,9 +127,10 @@ enum Endpoint {
 
     var queryItems: [URLQueryItem] {
         switch self {
-        case .videos(let sort, let start, let count, let includeAllPrivacy):
+        case .videos(let sort, let start, let count, let includeAllPrivacy, let isLocal):
             var items = paging(start: start, count: count) + [URLQueryItem(name: "sort", value: sort)]
             if includeAllPrivacy { items.append(contentsOf: allPrivacyItems()) }
+            if let isLocal { items.append(URLQueryItem(name: "isLocal", value: isLocal ? "true" : "false")) }
             return items
         case .videoChannels(let start, let count):
             return paging(start: start, count: count)
@@ -238,8 +239,9 @@ extension Endpoint {
     /// Short label for Unified Logging (paths + non-sensitive parameters only).
     var networkLogDescription: String {
         switch self {
-        case .videos(let sort, let start, let count, let includeAllPrivacy):
-            return "GET /api/v1/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy)"
+        case .videos(let sort, let start, let count, let includeAllPrivacy, let isLocal):
+            let scope = isLocal.map { $0 ? "local" : "remote" } ?? "all"
+            return "GET /api/v1/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy) scope=\(scope)"
         case .channelVideos(let handle, let start, let count, let sort, let includeAllPrivacy):
             return "GET …/video-channels/\(handle)/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy)"
         case .searchVideos(let search, let start, let count):

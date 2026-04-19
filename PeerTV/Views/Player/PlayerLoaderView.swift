@@ -792,13 +792,19 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private func presentQualityMenu() {
         guard let vc = containerController ?? controller, !resolutions.isEmpty else { return }
         let alert = UIAlertController(title: "Quality", message: nil, preferredStyle: .actionSheet)
-        alert.addAction(UIAlertAction(title: "Auto", style: .default) { [weak self] _ in
+        let selected = currentLabel
+        let autoAction = UIAlertAction(title: Self.menuTitle("Auto", selected: selected == "Auto"), style: .default) { [weak self] _ in
             self?.switchItem(to: nil)
-        })
+        }
+        alert.addAction(autoAction)
+        if selected == "Auto" { alert.preferredAction = autoAction }
         for option in resolutions {
-            alert.addAction(UIAlertAction(title: option.label, style: .default) { [weak self] _ in
+            let isCurrent = option.label == selected
+            let action = UIAlertAction(title: Self.menuTitle(option.label, selected: isCurrent), style: .default) { [weak self] _ in
                 self?.switchItem(to: option)
-            })
+            }
+            alert.addAction(action)
+            if isCurrent { alert.preferredAction = action }
         }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         vc.present(alert, animated: true)
@@ -808,12 +814,22 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         guard let vc = containerController ?? controller else { return }
         let alert = UIAlertController(title: "Speed", message: nil, preferredStyle: .actionSheet)
         for speed in Self.speeds {
-            alert.addAction(UIAlertAction(title: speedLabel(speed), style: .default) { [weak self] _ in
+            let isCurrent = abs(speed - currentSpeed) < 0.001
+            let action = UIAlertAction(title: Self.menuTitle(speedLabel(speed), selected: isCurrent), style: .default) { [weak self] _ in
                 self?.setSpeed(speed)
-            })
+            }
+            alert.addAction(action)
+            if isCurrent { alert.preferredAction = action }
         }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         vc.present(alert, animated: true)
+    }
+
+    /// Prefixes a checkmark to the title of the currently selected option so users can scan the
+    /// list and see which one is active. Pairs with `UIAlertController.preferredAction` which
+    /// also bolds / pre-focuses that same entry.
+    private static func menuTitle(_ label: String, selected: Bool) -> String {
+        selected ? "✓  \(label)" : label
     }
 
     // MARK: Actions
