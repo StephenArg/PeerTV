@@ -651,8 +651,10 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         let seekTime = player.currentTime()
         let targetSpeed = currentSpeed
         let targetURL = option?.url ?? autoURL
+        let label = option?.label ?? "Auto"
+        let ext = targetURL.pathExtension.lowercased()
 
-        currentLabel = option?.label ?? "Auto"
+        currentLabel = label
         isSwitching = true
         statusObservation?.invalidate()
         statusObservation = nil
@@ -660,7 +662,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         player.pause()
         showLoadingOverlay(in: controller)
 
-        if targetURL.pathExtension.lowercased() == "m3u8", let apiClient {
+        if ext == "m3u8", let apiClient {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let withToken = await PlayerPresenter.urlWithHLSTokenIfNeeded(
@@ -702,7 +704,21 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         initialLoadObservation?.invalidate()
         initialLoadObservation = nil
 
+        let tolerance = CMTime(seconds: 5, preferredTimescale: 600)
+
         let newItem = AVPlayerItem(asset: asset)
+        // Keep AVPlayer from speculatively prebuffering the default ~50 s of the target playlist —
+        // we only need enough to start playback, and a larger buffer slows mid-stream switches.
+        // At 4K (~32 Mbps) on an 8 Mbps pipe, each 1 s of target buffer costs ~4 s of wall-clock
+        // preroll, so we keep this small; AVPlayer will still grow the buffer during playback.
+        newItem.preferredForwardBufferDuration = 8
+
+        // Pre-install the seek directly on the `AVPlayerItem` before it is ever attached to a player.
+        // Without this, AVPlayer begins buffering from `currentTime = 0` during the unknown→readyToPlay
+        // preroll and then throws ~52 s of data away the moment we seek to e.g. t=570 s. Queuing the
+        // seek here tells AVFoundation the real playhead target, so the very first segments it fetches
+        // are at the seek destination.
+        newItem.seek(to: seekTime, toleranceBefore: tolerance, toleranceAfter: tolerance, completionHandler: nil)
 
         if let oldObs = endObserver {
             NotificationCenter.default.removeObserver(oldObs)
@@ -730,8 +746,6 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         }
         startProgressReporting()
 
-        let tolerance = CMTime(seconds: 5, preferredTimescale: 600)
-
         statusObservation = newItem.observe(\.status, options: [.new]) {
             [weak self, weak newPlayer] item, _ in
             DispatchQueue.main.async {
@@ -739,17 +753,15 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                 if item.status == .readyToPlay {
                     self.statusObservation?.invalidate()
                     self.statusObservation = nil
+                    // No explicit second seek — the item was pre-seeked before the player was attached,
+                    // so its first buffered range is already at the target time. Just set the rate to
+                    // start playback.
                     newPlayer?.rate = targetSpeed
-                    newPlayer?.seek(to: seekTime, toleranceBefore: tolerance, toleranceAfter: tolerance) {
-                        finished in
-                        DispatchQueue.main.async {
-                            self.isSwitching = false
-                            self.removeLoadingOverlay()
-                        }
-                    }
+                    self.isSwitching = false
+                    self.removeLoadingOverlay()
                 } else if item.status == .failed {
                     let err = item.error
-                    PlaybackLog.log.error("performAssetSwap item failed videoId=\(self.videoId, privacy: .public) \(err?.localizedDescription ?? "nil", privacy: .public)")
+                    PlaybackLog.log.error("resolution switch failed videoId=\(self.videoId, privacy: .public) \(err?.localizedDescription ?? "nil", privacy: .public)")
                     self.statusObservation?.invalidate()
                     self.statusObservation = nil
                     self.isSwitching = false
