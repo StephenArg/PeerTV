@@ -6,6 +6,10 @@ struct SettingsView: View {
     @State private var shuffleEnabled = DebugFlags.shuffleTabEnabled
     @State private var showVideoDetailRawJSON = DebugFlags.showVideoDetailRawJSON
     @State private var showShuffleRestartAlert = false
+    // Persisted via the same `UserDefaults` key read by `PlayerSettings.bufferCap` so playback
+    // code and the Settings picker stay in sync across launches.
+    @AppStorage(PlayerSettings.bufferCapKey) private var bufferCapRawValue: Int = BufferCap.gb1.rawValue
+    @AppStorage(PlayerSettings.defaultResolutionKey) private var defaultResolutionRawValue: Int = DefaultResolution.auto.rawValue
 
     var body: some View {
         ScrollView {
@@ -21,6 +25,21 @@ struct SettingsView: View {
                     if !session.username.isEmpty {
                         LabeledContent("Logged in as", value: session.username)
                     }
+                }
+
+                settingsSection(title: "Playback") {
+                    Picker("Default quality", selection: $defaultResolutionRawValue) {
+                        ForEach(DefaultResolution.allCases) { res in
+                            Text(res.displayName).tag(res.rawValue)
+                        }
+                    }
+                    Picker("Buffer cap", selection: $bufferCapRawValue) {
+                        ForEach(BufferCap.allCases) { cap in
+                            Text(cap.displayName).tag(cap.rawValue)
+                        }
+                    }
+                } footer: {
+                    Text("Default quality applies when a video opens. If the chosen resolution isn't offered, the next lower one plays (falling back to Auto if none exists). Auto uses HLS adaptive bitrate.\n\nBuffer cap is the approximate maximum AVPlayer will keep buffered ahead. Larger caps smooth over slow networks at the cost of memory.")
                 }
 
                 settingsSection(title: "Downloads") {

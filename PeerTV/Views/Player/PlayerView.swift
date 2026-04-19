@@ -6,12 +6,14 @@ struct PlayerView: View {
     let url: URL
     let resolutions: [ResolutionOption]
     let accessToken: String?
+    let title: String
     @Environment(\.dismiss) private var dismiss
 
-    init(url: URL, resolutions: [ResolutionOption] = [], accessToken: String? = nil) {
+    init(url: URL, resolutions: [ResolutionOption] = [], accessToken: String? = nil, title: String = "") {
         self.url = url
         self.resolutions = resolutions
         self.accessToken = accessToken
+        self.title = title
     }
 
     var body: some View {
@@ -19,6 +21,7 @@ struct PlayerView: View {
             url: url,
             resolutions: resolutions,
             accessToken: accessToken,
+            title: title,
             onDismiss: { dismiss() }
         )
         .ignoresSafeArea()
@@ -31,30 +34,44 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
     let url: URL
     let resolutions: [ResolutionOption]
     let accessToken: String?
+    var title: String = ""
     var onDismiss: (() -> Void)?
 
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
+    func makeUIViewController(context: Context) -> UIViewController {
         let controller = AVPlayerViewController()
+        controller.playbackControlsIncludeTransportBar = false
+        if TransportBarConfiguration.requiresHidingAllSystemPlaybackControls {
+            controller.showsPlaybackControls = false
+        }
+
         let asset = Self.makeAsset(url: url, accessToken: accessToken, instanceBaseURL: nil)
         let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
         let player = AVPlayer(playerItem: item)
         controller.player = player
         controller.delegate = context.coordinator
         context.coordinator.player = player
         context.coordinator.controller = controller
+        context.coordinator.setupTransportBar()
 
-        controller.transportBarCustomMenuItems = context.coordinator.buildMenus()
+        let container = PlayerContainerViewController(
+            playerViewController: controller,
+            overlayRoot: context.coordinator.transportBarRootView
+        )
+        context.coordinator.container = container
+
         player.play()
-        return controller
+        return container
     }
 
-    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             resolutions: resolutions,
             initialURL: url,
             accessToken: accessToken,
+            title: title,
             onDismiss: onDismiss
         )
     }
@@ -84,24 +101,54 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
     final class Coordinator: NSObject, AVPlayerViewControllerDelegate {
         weak var player: AVPlayer?
         weak var controller: AVPlayerViewController?
+        weak var container: UIViewController?
         let onDismiss: (() -> Void)?
 
         private let resolutions: [ResolutionOption]
         private let autoURL: URL
         private let accessToken: String?
+        private let title: String
         private var currentLabel: String = "Auto"
         private var currentSpeed: Float = 1.0
         private var statusObservation: NSKeyValueObservation?
         private var loadingOverlay: UIView?
         private var isSwitching = false
+        private var transportBar: TransportBarController?
+
+        var transportBarRootView: TransportBarRootView {
+            if let bar = transportBar { return bar.rootView }
+            // Transport bar is created on first access (before container is built).
+            let bar = TransportBarController(
+                showsQualityButton: !resolutions.isEmpty,
+                title: title,
+                onQualityTapped: { [weak self] in self?.presentQualityMenu() },
+                onSpeedTapped: { [weak self] in self?.presentSpeedMenu() }
+            )
+            transportBar = bar
+            return bar.rootView
+        }
 
         private static let speeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 
-        init(resolutions: [ResolutionOption], initialURL: URL, accessToken: String?, onDismiss: (() -> Void)?) {
+        init(resolutions: [ResolutionOption], initialURL: URL, accessToken: String?, title: String, onDismiss: (() -> Void)?) {
             self.resolutions = resolutions
             self.autoURL = initialURL
             self.accessToken = accessToken
+            self.title = title
             self.onDismiss = onDismiss
+        }
+
+        func setupTransportBar() {
+            guard let player else { return }
+            if transportBar == nil {
+                transportBar = TransportBarController(
+                    showsQualityButton: !resolutions.isEmpty,
+                    title: title,
+                    onQualityTapped: { [weak self] in self?.presentQualityMenu() },
+                    onSpeedTapped: { [weak self] in self?.presentSpeedMenu() }
+                )
+            }
+            transportBar?.attach(player: player)
         }
 
         // MARK: Delegate
@@ -117,63 +164,39 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
         ) {
             playerViewController.player?.pause()
             statusObservation = nil
+            transportBar?.tearDown()
+            transportBar = nil
             removeLoadingOverlay()
             onDismiss?()
         }
 
-        // MARK: Menus
+        // MARK: Menus (action sheets)
 
-        func buildMenus() -> [UIMenuElement] {
-            var menus: [UIMenuElement] = []
-            if let resMenu = buildResolutionMenu() {
-                menus.append(resMenu)
-            }
-            menus.append(buildSpeedMenu())
-            return menus
-        }
-
-        private func buildResolutionMenu() -> UIMenu? {
-            guard !resolutions.isEmpty else { return nil }
-
-            var actions: [UIAction] = []
-
-            actions.append(UIAction(
-                title: "Auto",
-                state: currentLabel == "Auto" ? .on : .off
-            ) { [weak self] _ in
+        private func presentQualityMenu() {
+            guard let vc = container ?? controller, !resolutions.isEmpty else { return }
+            let alert = UIAlertController(title: "Quality", message: nil, preferredStyle: .actionSheet)
+            alert.addAction(UIAlertAction(title: "Auto", style: .default) { [weak self] _ in
                 self?.switchItem(to: nil)
             })
-
             for option in resolutions {
-                actions.append(UIAction(
-                    title: option.label,
-                    state: currentLabel == option.label ? .on : .off
-                ) { [weak self] _ in
+                alert.addAction(UIAlertAction(title: option.label, style: .default) { [weak self] _ in
                     self?.switchItem(to: option)
                 })
             }
-
-            return UIMenu(
-                title: "Quality",
-                image: UIImage(systemName: "sparkles.tv"),
-                children: actions
-            )
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            vc.present(alert, animated: true)
         }
 
-        private func buildSpeedMenu() -> UIMenu {
-            let actions = Self.speeds.map { speed in
-                UIAction(
-                    title: speedLabel(speed),
-                    state: currentSpeed == speed ? .on : .off
-                ) { [weak self] _ in
+        private func presentSpeedMenu() {
+            guard let vc = container ?? controller else { return }
+            let alert = UIAlertController(title: "Speed", message: nil, preferredStyle: .actionSheet)
+            for speed in Self.speeds {
+                alert.addAction(UIAlertAction(title: speedLabel(speed), style: .default) { [weak self] _ in
                     self?.setSpeed(speed)
-                }
+                })
             }
-            return UIMenu(
-                title: "Speed",
-                image: UIImage(systemName: "gauge.with.dots.needle.67percent"),
-                children: actions
-            )
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            vc.present(alert, animated: true)
         }
 
         // MARK: Actions
@@ -199,6 +222,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
                 instanceBaseURL: nil
             )
             let newItem = AVPlayerItem(asset: asset)
+            newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
             player.replaceCurrentItem(with: newItem)
 
             let tolerance = CMTime(seconds: 5, preferredTimescale: 600)
@@ -226,8 +250,6 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
                     }
                 }
             }
-
-            refreshMenus()
         }
 
         private func setSpeed(_ speed: Float) {
@@ -235,23 +257,20 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
             if let player, player.rate > 0 {
                 player.rate = speed
             }
-            refreshMenus()
-        }
-
-        private func refreshMenus() {
-            controller?.transportBarCustomMenuItems = buildMenus()
         }
 
         // MARK: Loading overlay
 
         private func showLoadingOverlay(in controller: AVPlayerViewController) {
             removeLoadingOverlay(animated: false)
+            transportBar?.setLoadingOverlayActive(true)
             PlayerLoadingOverlay.install(in: controller) { [weak self] wrapper in
                 self?.loadingOverlay = wrapper
             }
         }
 
         private func removeLoadingOverlay(animated: Bool = true) {
+            transportBar?.setLoadingOverlayActive(false)
             guard let overlay = loadingOverlay else { return }
             loadingOverlay = nil
             if animated {

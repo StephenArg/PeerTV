@@ -13,6 +13,7 @@ enum Endpoint {
     case videos(sort: String, start: Int, count: Int, includeAllPrivacy: Bool = false)
     case videoDetail(id: String)
     case videoFileToken(id: String)
+    case videoStoryboards(id: String)
 
     // Channels
     case videoChannels(start: Int, count: Int)
@@ -73,6 +74,8 @@ enum Endpoint {
             return "/api/v1/videos/\(id)"
         case .videoFileToken(let id):
             return "/api/v1/videos/\(id)/token"
+        case .videoStoryboards(let id):
+            return "/api/v1/videos/\(id)/storyboards"
         case .videoChannels:
             return "/api/v1/video-channels"
         case .channelDetail(let handle):

@@ -28,6 +28,7 @@ enum PlayerLoadingOverlay {
         wrapper.translatesAutoresizingMaskIntoConstraints = false
         wrapper.backgroundColor = .clear
         overlayContainer.addSubview(wrapper)
+        overlayContainer.bringSubviewToFront(wrapper)
         NSLayoutConstraint.activate([
             wrapper.topAnchor.constraint(equalTo: overlayContainer.topAnchor),
             wrapper.bottomAnchor.constraint(equalTo: overlayContainer.bottomAnchor),

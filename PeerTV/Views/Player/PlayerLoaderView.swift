@@ -51,11 +51,16 @@ final class PlayerPresenter {
         }
 
         if let localURL = DownloadManager.shared.localFileURL(for: videoId) {
+            let localTitle = DownloadManager.shared.downloadedVideos.first(where: { $0.videoId == videoId })?.name ?? ""
+            // Local downloads have no resolution choice; play the file as-is.
             presentPlayer(
                 url: localURL,
+                autoURL: localURL,
+                initialLabel: "Auto",
                 resolutions: [],
                 accessToken: nil,
                 videoId: videoId,
+                title: localTitle,
                 apiClient: apiClient,
                 playlistQueue: playlistQueue,
                 isLocalDownload: true
@@ -98,11 +103,36 @@ final class PlayerPresenter {
                 )
 
                 removeLoadingOverlay()
+                // Honor the user's default-resolution setting before handing the URL to the
+                // coordinator; the AVPlayerItem starts on that variant instead of the master.
+                let resolutionOptions = video.resolutionOptions
+                let pick = Self.chooseInitialPlayback(
+                    resolutions: resolutionOptions,
+                    masterURL: playURL,
+                    defaultResolution: PlayerSettings.defaultResolution
+                )
+                // Inject HLS token on the chosen variant URL too (the master URL was already
+                // token-injected above, but a resolution-specific `.m3u8` needs its own query).
+                let startURL: URL
+                if pick.url == playURL {
+                    startURL = pick.url
+                } else {
+                    startURL = await Self.urlWithHLSTokenIfNeeded(
+                        url: pick.url,
+                        videoId: videoId,
+                        apiClient: apiClient,
+                        accessToken: accessToken
+                    )
+                }
+
                 presentPlayer(
-                    url: playURL,
-                    resolutions: video.resolutionOptions,
+                    url: startURL,
+                    autoURL: playURL,
+                    initialLabel: pick.label,
+                    resolutions: resolutionOptions,
                     accessToken: accessToken,
                     videoId: videoId,
+                    title: video.name ?? "",
                     apiClient: apiClient,
                     playlistQueue: playlistQueue,
                     isLocalDownload: false
@@ -179,13 +209,45 @@ final class PlayerPresenter {
         top.present(alert, animated: true)
     }
 
+    /// Chooses which URL the player should start from, based on the user's default-resolution
+    /// setting. Returns both the URL to play *and* the Quality menu label that matches it.
+    ///
+    /// - Exact match on the requested resolution → use that variant.
+    /// - No exact match → next lower resolution available ("play the next largest quality").
+    /// - No lower resolution either → fall back to Auto (the master playlist).
+    ///
+    /// For local downloads and non-HLS / non-variant sources the fallback is the passed-in
+    /// `masterURL` unchanged, with the `"Auto"` label.
+    static func chooseInitialPlayback(
+        resolutions: [ResolutionOption],
+        masterURL: URL,
+        defaultResolution: DefaultResolution
+    ) -> (url: URL, label: String) {
+        guard defaultResolution != .auto else { return (masterURL, "Auto") }
+        let target = defaultResolution.rawValue
+        if let exact = resolutions.first(where: { $0.resolutionId == target }) {
+            return (exact.url, exact.label)
+        }
+        // "Next largest quality" = largest resolution id strictly less than the target.
+        if let nextLower = resolutions
+            .filter({ $0.resolutionId < target })
+            .max(by: { $0.resolutionId < $1.resolutionId })
+        {
+            return (nextLower.url, nextLower.label)
+        }
+        return (masterURL, "Auto")
+    }
+
     // MARK: - Player presentation
 
     private func presentPlayer(
         url: URL,
+        autoURL: URL,
+        initialLabel: String,
         resolutions: [ResolutionOption],
         accessToken: String?,
         videoId: String,
+        title: String,
         apiClient: PeerTubeAPIClient,
         playlistQueue: PlaylistPlaybackQueue?,
         isLocalDownload: Bool
@@ -204,19 +266,26 @@ final class PlayerPresenter {
             instanceBaseURL: apiClient.baseURL
         )
         let item = AVPlayerItem(asset: asset)
+        item.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
         let player = AVPlayer(playerItem: item)
 
         let playerVC = AVPlayerViewController()
         playerVC.player = player
         playerVC.modalPresentationStyle = .fullScreen
+        playerVC.playbackControlsIncludeTransportBar = false
+        if TransportBarConfiguration.requiresHidingAllSystemPlaybackControls {
+            playerVC.showsPlaybackControls = false
+        }
 
         let coordinator = PlayerCoordinator(
             resolutions: resolutions,
-            initialURL: url,
+            autoURL: autoURL,
+            initialLabel: initialLabel,
             accessToken: accessToken,
             player: player,
             controller: playerVC,
             videoId: videoId,
+            title: title,
             apiClient: apiClient,
             playlistQueue: playlistQueue,
             isLocalDownload: isLocalDownload,
@@ -225,14 +294,28 @@ final class PlayerPresenter {
             self?.isPresenting = false
         }
         playerVC.delegate = coordinator
-        playerVC.transportBarCustomMenuItems = coordinator.buildMenus()
+
+        // Wrap AVPlayerViewController in a container so focus routes to the overlay reliably.
+        let container = PlayerContainerViewController(
+            playerViewController: playerVC,
+            overlayRoot: coordinator.transportBarRootView
+        )
+        coordinator.containerController = container
+        container.onDismissed = { [weak coordinator] in
+            coordinator?.performDismissCleanup()
+        }
+        // Let the container consult the coordinator before dismissing on Menu/Back: a
+        // pending visual-scrub commit is cancelled in place instead of closing the player.
+        container.shouldConsumeMenuPress = { [weak coordinator] in
+            coordinator?.handleMenuPressIfNeeded() ?? false
+        }
 
         objc_setAssociatedObject(
-            playerVC, &AssociatedKeys.coordinator,
+            container, &AssociatedKeys.coordinator,
             coordinator, .OBJC_ASSOCIATION_RETAIN_NONATOMIC
         )
 
-        presenter.present(playerVC, animated: true) {
+        presenter.present(container, animated: true) {
             PlaybackLog.log.notice("AVPlayerViewController on-screen videoId=\(videoId, privacy: .public)")
             player.play()
         }
@@ -308,6 +391,7 @@ private enum AssociatedKeys {
 final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     weak var player: AVPlayer?
     weak var controller: AVPlayerViewController?
+    weak var containerController: UIViewController?
     private let onDismiss: () -> Void
     private var didCallDismiss = false
 
@@ -319,7 +403,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     /// Snapshot from `apiClient.baseURL` at presentation time (avoids MainActor isolation in delegate methods).
     private let instanceBaseURL: URL?
     private var playlistQueue: PlaylistPlaybackQueue?
-    private var currentLabel: String = "Auto"
+    private var currentLabel: String
     private var currentSpeed: Float = 1.0
     private var statusObservation: NSKeyValueObservation?
     private var initialLoadObservation: NSKeyValueObservation?
@@ -328,23 +412,27 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private var endObserver: Any?
     private var progressTimeObserver: Any?
     private let isLocalDownload: Bool
+    private var transportBar: TransportBarController?
+    private var title: String
 
     private static let speeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
     private static let watchReportInterval: Double = 30
 
-    init(resolutions: [ResolutionOption], initialURL: URL, accessToken: String?,
+    init(resolutions: [ResolutionOption], autoURL: URL, initialLabel: String, accessToken: String?,
          player: AVPlayer, controller: AVPlayerViewController,
-         videoId: String, apiClient: PeerTubeAPIClient?,
+         videoId: String, title: String, apiClient: PeerTubeAPIClient?,
          playlistQueue: PlaylistPlaybackQueue?,
          isLocalDownload: Bool,
          instanceBaseURL: URL?,
          onDismiss: @escaping () -> Void) {
         self.resolutions = resolutions
-        self.autoURL = initialURL
+        self.autoURL = autoURL
+        self.currentLabel = initialLabel
         self.accessToken = accessToken
         self.player = player
         self.controller = controller
         self.videoId = videoId
+        self.title = title
         self.apiClient = apiClient
         self.instanceBaseURL = instanceBaseURL
         self.playlistQueue = playlistQueue
@@ -363,6 +451,79 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         reportCurrentTime()
         startProgressReporting()
         observeInitialItemIfNeeded(player: player)
+
+        transportBar = TransportBarController(
+            showsQualityButton: !resolutions.isEmpty,
+            title: title,
+            onQualityTapped: { [weak self] in self?.presentQualityMenu() },
+            onSpeedTapped: { [weak self] in self?.presentSpeedMenu() }
+        )
+        transportBar?.attach(player: player)
+        fetchStoryboards(for: videoId)
+    }
+
+    /// Fetches the PeerTube per-video sprite-sheet storyboard and installs a provider on the
+    /// transport bar so the skim / visual-scrub thumbnail popover can crop frames from it.
+    /// Runs in the background; if the instance hasn't generated a storyboard (empty list / 404),
+    /// the transport bar falls back to `AVAssetImageGenerator` (which effectively only works for
+    /// local downloads).
+    private func fetchStoryboards(for id: String) {
+        guard !isLocalDownload, let apiClient else { return }
+        Task { [weak self, videoId = id] in
+            await self?.loadStoryboards(id: videoId, apiClient: apiClient)
+        }
+    }
+
+    private func loadStoryboards(id: String, apiClient: PeerTubeAPIClient) async {
+        do {
+            let data = try await apiClient.rawRequest(.videoStoryboards(id: id))
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let resp = try decoder.decode(VideoStoryboardsResponse.self, from: data)
+            guard let storyboard = resp.storyboards.first,
+                  let sheetURL = await storyboardImageURL(path: storyboard.storyboardPath, apiClient: apiClient)
+            else { return }
+
+            let (imageData, _) = try await URLSession.shared.data(from: sheetURL)
+            guard let sheet = UIImage(data: imageData) else { return }
+
+            let provider = StoryboardThumbnailProvider(sheet: sheet, storyboard: storyboard)
+            await MainActor.run { [weak self] in
+                // Guard against late arrivals after playlist transitions — only install if
+                // `videoId` still matches.
+                guard let self, self.videoId == id else { return }
+                self.transportBar?.storyboardProvider = provider
+            }
+        } catch {
+            PlaybackLog.log.notice("storyboards unavailable videoId=\(id, privacy: .public) \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    @MainActor
+    private func storyboardImageURL(path: String, apiClient: PeerTubeAPIClient) -> URL? {
+        guard let base = apiClient.baseURL else { return nil }
+        // Paths returned by the API are instance-rooted (e.g. `/lazy-static/storyboards/…`).
+        if path.hasPrefix("http://") || path.hasPrefix("https://") {
+            return URL(string: path)
+        }
+        let trimmed = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        return URL(string: trimmed, relativeTo: base)?.absoluteURL
+    }
+
+    /// Expose the transport bar's root view so `PlayerContainerViewController` can install it
+    /// as a sibling of the `AVPlayerViewController`'s view.
+    var transportBarRootView: TransportBarRootView {
+        guard let transportBar else {
+            // `transportBar` is created unconditionally in `init`; this path should be impossible.
+            fatalError("transportBar is nil — PlayerCoordinator.init did not create one")
+        }
+        return transportBar.rootView
+    }
+
+    /// Called by the container VC before dismissing on Menu/Back. Returns `true` if the transport
+    /// bar consumed the press (e.g. cancelled a staged visual scrub), so dismissal is skipped.
+    func handleMenuPressIfNeeded() -> Bool {
+        transportBar?.handleMenuPressIfNeeded() ?? false
     }
 
     deinit {
@@ -394,18 +555,14 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                     self.initialLoadObservation?.invalidate()
                     self.initialLoadObservation = nil
                     let message = err?.localizedDescription ?? "The stream could not be opened."
-                    if let vc = self.controller {
+                    if let vc = self.containerController ?? self.controller {
                         let alert = UIAlertController(title: "Playback failed", message: message, preferredStyle: .alert)
                         alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
-                            self?.controller?.dismiss(animated: true) {
-                                self?.performDismissCleanup()
-                            }
+                            self?.dismissPlayer()
                         })
                         vc.present(alert, animated: true)
                     } else {
-                        self.controller?.dismiss(animated: true) { [weak self] in
-                            self?.performDismissCleanup()
-                        }
+                        self.dismissPlayer()
                     }
                 default:
                     break
@@ -439,9 +596,14 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             }
             return
         }
-        controller?.dismiss(animated: true) { [weak self] in
-            self?.performDismissCleanup()
-        }
+        dismissPlayer()
+    }
+
+    /// Dismisses the container (and thus the embedded `AVPlayerViewController`). `performDismissCleanup`
+    /// is invoked by the container's `onDismissed` callback, so we don't need to call it again here.
+    private func dismissPlayer() {
+        let vc = containerController ?? controller
+        vc?.dismiss(animated: true)
     }
 
     /// Keeps the same `AVPlayerViewController` open and swaps the item (no flash back to the playlist).
@@ -484,24 +646,50 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             playlistQueue = nextQueue
             resolutions = video.resolutionOptions
             autoURL = url
-            currentLabel = "Auto"
+            // Apply the default-resolution setting to the next item too.
+            let pick = PlayerPresenter.chooseInitialPlayback(
+                resolutions: resolutions,
+                masterURL: url,
+                defaultResolution: PlayerSettings.defaultResolution
+            )
+            let startURL: URL
+            if pick.url == url {
+                startURL = url
+            } else {
+                startURL = await PlayerPresenter.urlWithHLSTokenIfNeeded(
+                    url: pick.url,
+                    videoId: nextVideoId,
+                    apiClient: nextQueue.apiClient,
+                    accessToken: nextQueue.accessToken
+                )
+            }
+            currentLabel = pick.label
+            title = video.name ?? ""
+            transportBar?.setTitle(title)
+            // Drop stale storyboard; `fetchStoryboards` below re-installs one for the new item.
+            transportBar?.storyboardProvider = nil
+            fetchStoryboards(for: nextVideoId)
 
             let asset = AVPlayerViewControllerRepresentable.makeAsset(
-                url: url,
+                url: startURL,
                 accessToken: nextQueue.accessToken,
                 instanceBaseURL: nextQueue.apiClient.baseURL
             )
             let newItem = AVPlayerItem(asset: asset)
+            newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
 
             if let obs = progressTimeObserver, let p = self.player {
                 p.removeTimeObserver(obs)
                 progressTimeObserver = nil
             }
 
+            transportBar?.detach()
+
             let newPlayer = AVPlayer(playerItem: newItem)
             newPlayer.automaticallyWaitsToMinimizeStalling = true
             self.player = newPlayer
             controller.player = newPlayer
+            transportBar?.attach(player: newPlayer)
 
             endObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
@@ -525,7 +713,6 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                                 newPlayer.rate = self.currentSpeed
                                 self.isSwitching = false
                                 self.removeLoadingOverlay()
-                                self.refreshMenus()
                                 newPlayer.play()
                             }
                         }
@@ -536,9 +723,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                         self.statusObservation = nil
                         self.isSwitching = false
                         self.removeLoadingOverlay()
-                        self.controller?.dismiss(animated: true) {
-                            self.performDismissCleanup()
-                        }
+                        self.dismissPlayer()
                     }
                 }
             }
@@ -546,9 +731,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             PlaybackLog.log.error("playlist transition videoDetail failed videoId=\(nextVideoId, privacy: .public) \(error.localizedDescription, privacy: .public)")
             isSwitching = false
             removeLoadingOverlay()
-            controller.dismiss(animated: true) { [weak self] in
-                self?.performDismissCleanup()
-            }
+            dismissPlayer()
         }
     }
 
@@ -575,19 +758,26 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     // MARK: Delegate
 
     func playerViewControllerShouldDismiss(_ playerViewController: AVPlayerViewController) -> Bool {
-        true
+        // AVPlayerViewController runs its own internal Menu-press gesture recognizer on tvOS
+        // that asks this delegate (outside the regular `pressesBegan` chain). Returning `false`
+        // here when a visual-scrub is staged stops AVKit from tearing down the container, and
+        // `handleMenuPressIfNeeded()` cancels the scrub in the same call.
+        let consumed = transportBar?.handleMenuPressIfNeeded() == true
+        return !consumed
     }
 
     func playerViewControllerDidEndDismissalTransition(_ playerViewController: AVPlayerViewController) {
         performDismissCleanup()
     }
 
-    private func performDismissCleanup() {
+    func performDismissCleanup() {
         guard !didCallDismiss else { return }
         didCallDismiss = true
         reportCurrentTime()
         player?.pause()
         statusObservation = nil
+        transportBar?.tearDown()
+        transportBar = nil
         removeLoadingOverlay()
         NotificationCenter.default.post(
             name: .peerTVPlayerDismissed,
@@ -597,50 +787,33 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         onDismiss()
     }
 
-    // MARK: Menus
+    // MARK: Menus (action sheets; native transport bar is hidden)
 
-    func buildMenus() -> [UIMenuElement] {
-        var menus: [UIMenuElement] = []
-        if let resMenu = buildResolutionMenu() {
-            menus.append(resMenu)
-        }
-        menus.append(buildSpeedMenu())
-        return menus
-    }
-
-    private func buildResolutionMenu() -> UIMenu? {
-        guard !resolutions.isEmpty else { return nil }
-
-        var actions: [UIAction] = []
-        actions.append(UIAction(
-            title: "Auto",
-            state: currentLabel == "Auto" ? .on : .off
-        ) { [weak self] _ in
+    private func presentQualityMenu() {
+        guard let vc = containerController ?? controller, !resolutions.isEmpty else { return }
+        let alert = UIAlertController(title: "Quality", message: nil, preferredStyle: .actionSheet)
+        alert.addAction(UIAlertAction(title: "Auto", style: .default) { [weak self] _ in
             self?.switchItem(to: nil)
         })
-
         for option in resolutions {
-            actions.append(UIAction(
-                title: option.label,
-                state: currentLabel == option.label ? .on : .off
-            ) { [weak self] _ in
+            alert.addAction(UIAlertAction(title: option.label, style: .default) { [weak self] _ in
                 self?.switchItem(to: option)
             })
         }
-
-        return UIMenu(title: "Quality", image: UIImage(systemName: "sparkles.tv"), children: actions)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        vc.present(alert, animated: true)
     }
 
-    private func buildSpeedMenu() -> UIMenu {
-        let actions = Self.speeds.map { speed in
-            UIAction(
-                title: speedLabel(speed),
-                state: currentSpeed == speed ? .on : .off
-            ) { [weak self] _ in
+    private func presentSpeedMenu() {
+        guard let vc = containerController ?? controller else { return }
+        let alert = UIAlertController(title: "Speed", message: nil, preferredStyle: .actionSheet)
+        for speed in Self.speeds {
+            alert.addAction(UIAlertAction(title: speedLabel(speed), style: .default) { [weak self] _ in
                 self?.setSpeed(speed)
-            }
+            })
         }
-        return UIMenu(title: "Speed", image: UIImage(systemName: "gauge.with.dots.needle.67percent"), children: actions)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        vc.present(alert, animated: true)
     }
 
     // MARK: Actions
@@ -680,9 +853,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                     asset: asset, seekTime: seekTime, targetSpeed: targetSpeed,
                     controller: controller
                 )
-                self.refreshMenus()
             }
-            refreshMenus()
         } else {
             let asset = AVPlayerViewControllerRepresentable.makeAsset(
                 url: targetURL,
@@ -693,7 +864,6 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                 asset: asset, seekTime: seekTime, targetSpeed: targetSpeed,
                 controller: controller
             )
-            refreshMenus()
         }
     }
 
@@ -707,10 +877,11 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         let tolerance = CMTime(seconds: 5, preferredTimescale: 600)
 
         let newItem = AVPlayerItem(asset: asset)
-        // Keep AVPlayer from speculatively prebuffering the default ~50 s of the target playlist —
-        // we only need enough to start playback, and a larger buffer slows mid-stream switches.
-        // At 4K (~32 Mbps) on an 8 Mbps pipe, each 1 s of target buffer costs ~4 s of wall-clock
-        // preroll, so we keep this small; AVPlayer will still grow the buffer during playback.
+        // Mid-stream resolution switches prefer a *small* preroll so playback restarts quickly;
+        // the full user-selected buffer cap would force AVFoundation to fetch many minutes of
+        // the new target playlist before resuming. Keep a tight 8 s preroll here, then let
+        // AVPlayer grow the buffer to the user's cap during normal playback (set via the
+        // `.readyToPlay` branch below).
         newItem.preferredForwardBufferDuration = 8
 
         // Pre-install the seek directly on the `AVPlayerItem` before it is ever attached to a player.
@@ -731,11 +902,14 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         statusObservation?.invalidate()
         statusObservation = nil
 
+        transportBar?.detach()
+
         // Create a fresh AVPlayer — replaceCurrentItem on tvOS with HLS
         // causes the new item to hang at status=0 indefinitely.
         let newPlayer = AVPlayer(playerItem: newItem)
         self.player = newPlayer
         controller.player = newPlayer
+        transportBar?.attach(player: newPlayer)
 
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -753,6 +927,9 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                 if item.status == .readyToPlay {
                     self.statusObservation?.invalidate()
                     self.statusObservation = nil
+                    // Let the buffer grow to the user-selected cap now that the switch preroll
+                    // is done. During preroll we used a tight 8 s so playback resumed quickly.
+                    item.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
                     // No explicit second seek — the item was pre-seeked before the player was attached,
                     // so its first buffered range is already at the target time. Just set the rate to
                     // start playback.
@@ -776,23 +953,20 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         if let player, player.rate > 0 {
             player.rate = speed
         }
-        refreshMenus()
-    }
-
-    private func refreshMenus() {
-        controller?.transportBarCustomMenuItems = buildMenus()
     }
 
     // MARK: Loading overlay
 
     private func showLoadingOverlay(in controller: AVPlayerViewController) {
         removeLoadingOverlay(animated: false)
+        transportBar?.setLoadingOverlayActive(true)
         PlayerLoadingOverlay.install(in: controller) { [weak self] wrapper in
             self?.loadingOverlay = wrapper
         }
     }
 
     private func removeLoadingOverlay(animated: Bool = true) {
+        transportBar?.setLoadingOverlayActive(false)
         guard let overlay = loadingOverlay else { return }
         loadingOverlay = nil
         if animated {
