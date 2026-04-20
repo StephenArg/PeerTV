@@ -14,6 +14,9 @@ enum Endpoint {
     case videoDetail(id: String)
     case videoFileToken(id: String)
     case videoStoryboards(id: String)
+    case videoCommentThreads(videoId: String, start: Int, count: Int, sort: String)
+    case videoCommentThreadDetail(videoId: String, threadId: Int)
+    case postVideoComment(videoId: String, text: String)
 
     // Channels
     case videoChannels(start: Int, count: Int)
@@ -76,6 +79,10 @@ enum Endpoint {
             return "/api/v1/videos/\(id)/token"
         case .videoStoryboards(let id):
             return "/api/v1/videos/\(id)/storyboards"
+        case .videoCommentThreads(let id, _, _, _), .postVideoComment(let id, _):
+            return "/api/v1/videos/\(id)/comment-threads"
+        case .videoCommentThreadDetail(let id, let threadId):
+            return "/api/v1/videos/\(id)/comment-threads/\(threadId)"
         case .videoChannels:
             return "/api/v1/video-channels"
         case .channelDetail(let handle):
@@ -160,6 +167,8 @@ enum Endpoint {
             return [URLQueryItem(name: "uris", value: uri)]
         case .randomVideos:
             return [URLQueryItem(name: "count", value: "28")]
+        case .videoCommentThreads(_, let start, let count, let sort):
+            return paging(start: start, count: count) + [URLQueryItem(name: "sort", value: sort)]
         default:
             return []
         }
@@ -168,7 +177,7 @@ enum Endpoint {
     var method: String {
         switch self {
         case .usersToken, .addVideoToPlaylist, .subscribe, .reorderPlaylistVideos,
-             .videoFileToken:
+             .videoFileToken, .postVideoComment:
             return "POST"
         case .rateVideo, .watchVideo:
             return "PUT"
@@ -195,6 +204,8 @@ enum Endpoint {
             return try? JSONSerialization.data(withJSONObject: ["uri": uri])
         case .watchVideo(_, let currentTime):
             return try? JSONSerialization.data(withJSONObject: ["currentTime": currentTime])
+        case .postVideoComment(_, let text):
+            return try? JSONSerialization.data(withJSONObject: ["text": text])
         default:
             return nil
         }
@@ -206,7 +217,7 @@ enum Endpoint {
              .myVideoRating, .rateVideo, .addVideoToPlaylist,
              .removePlaylistElement, .reorderPlaylistVideos,
              .subscriptionExist, .subscribe, .unsubscribe,
-             .watchVideo, .videoFileToken:
+             .watchVideo, .videoFileToken, .postVideoComment:
             return true
         default:
             return false

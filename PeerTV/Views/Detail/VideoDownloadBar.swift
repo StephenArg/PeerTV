@@ -59,7 +59,7 @@ struct VideoDownloadBar: View {
         let file = selectedFile ?? files.first?.file
         let label = selectedQualityLabel ?? files.first?.label ?? ""
 
-        HStack(spacing: 20) {
+        HStack(spacing: 32) {
             Button {
                 guard let file else { return }
                 downloadManager.startDownload(
@@ -75,10 +75,12 @@ struct VideoDownloadBar: View {
                     Text("Download")
                 }
                 .font(.callout)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 16)
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.card)
+            .frame(maxWidth: .infinity)
 
             Button {
                 showQualityPicker = true
@@ -92,11 +94,14 @@ struct VideoDownloadBar: View {
                     }
                 }
                 .font(.callout)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 16)
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.card)
+            .frame(maxWidth: .infinity)
         }
+        .frame(maxWidth: .infinity)
         .confirmationDialog("Select Quality", isPresented: $showQualityPicker, titleVisibility: .visible) {
             ForEach(downloadableFiles, id: \.label) { entry in
                 let sizeLabel = entry.file.size.map { Self.formatBytes(Int64($0)) } ?? ""

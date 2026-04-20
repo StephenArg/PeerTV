@@ -1,6 +1,20 @@
 import Foundation
 import Combine
 import AVFoundation
+import os
+
+// MARK: - Download diagnostics (Console: subsystem com.peernext.PeerTV, category Download)
+
+private let downloadLog = Logger(subsystem: "com.peernext.PeerTV", category: "Download")
+
+/// Host + path + whether `videoFileToken` is present — no secrets in log lines.
+private func downloadURLDescription(_ url: URL) -> String {
+    let host = url.host ?? ""
+    let hasToken = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+        .queryItems?
+        .contains(where: { $0.name == "videoFileToken" }) ?? false
+    return "\(url.scheme ?? "https")://\(host)\(url.path) videoFileToken=\(hasToken)"
+}
 
 // MARK: - Download file validation (reject HTML/JSON error pages and truncated files)
 
@@ -70,6 +84,9 @@ final class DownloadManager: NSObject, ObservableObject {
         let expectedSize: Int64
         /// Master / variant HLS playlist URL for retry when direct `fileUrl` download returns 401/403.
         let fallbackPlaylistURLString: String?
+        /// True when file/HLS URLs point at another host than `apiClient` (federation). Local OAuth and
+        /// `videoFileToken` from our instance are not valid on the origin server — sending them causes 401.
+        let mediaHostDiffersFromAPI: Bool
         let accessToken: String?
         let apiClient: PeerTubeAPIClient?
     }
@@ -121,6 +138,19 @@ final class DownloadManager: NSObject, ObservableObject {
             ?? video.hlsPlaylistURL?.absoluteString
             ?? hlsPlaylistString
 
+        let primaryMediaURL: URL? = {
+            if let s = directURLString, let u = URL(string: s) { return u }
+            if let s = hlsPlaylistString, let u = URL(string: s) { return u }
+            if let s = fallbackPlaylistURLString, let u = URL(string: s) { return u }
+            return nil
+        }()
+        let apiHost = apiClient?.baseURL?.host?.lowercased()
+        let mediaHostDiffersFromAPI: Bool = {
+            guard let ah = apiHost,
+                  let mh = primaryMediaURL?.host?.lowercased() else { return false }
+            return mh != ah
+        }()
+
         let meta = PendingDownloadMeta(
             videoId: videoId,
             name: video.name ?? "Untitled",
@@ -130,9 +160,23 @@ final class DownloadManager: NSObject, ObservableObject {
             qualityLabel: qualityLabel,
             expectedSize: Int64(file.size ?? 0),
             fallbackPlaylistURLString: fallbackPlaylistURLString,
+            mediaHostDiffersFromAPI: mediaHostDiffersFromAPI,
             accessToken: accessToken,
             apiClient: apiClient
         )
+
+        let federationHost = video.channel?.host ?? video.account?.host
+        if let d = directURLString, let fileURL = URL(string: d) {
+            let fileHost = fileURL.host?.lowercased()
+            let sameOriginAsApi = (fileHost != nil && apiHost != nil && fileHost == apiHost)
+            downloadLog.notice(
+                "startDownload videoId=\(videoId, privacy: .public) quality=\(qualityLabel, privacy: .public) federationHost=\(federationHost ?? "nil", privacy: .public) apiHost=\(apiHost ?? "nil", privacy: .public) fileHost=\(fileHost ?? "nil", privacy: .public) sameOriginAsApi=\(sameOriginAsApi) mediaHostDiffersFromAPI=\(mediaHostDiffersFromAPI) hasToken=\(accessToken != nil) hasDirectURL=\(true) hasHlsFile=\(hlsPlaylistString != nil) hasMasterFallback=\(fallbackPlaylistURLString != nil)"
+            )
+        } else {
+            downloadLog.notice(
+                "startDownload videoId=\(videoId, privacy: .public) quality=\(qualityLabel, privacy: .public) federationHost=\(federationHost ?? "nil", privacy: .public) apiHost=\(apiHost ?? "nil", privacy: .public) mediaHostDiffersFromAPI=\(mediaHostDiffersFromAPI) hasDirectURL=\(false) hasHlsFile=\(hlsPlaylistString != nil) hasMasterFallback=\(fallbackPlaylistURLString != nil)"
+            )
+        }
 
         activeDownloads[videoId] = DownloadProgress(
             videoId: videoId,
@@ -144,9 +188,14 @@ final class DownloadManager: NSObject, ObservableObject {
         )
 
         if let urlString = directURLString, let downloadURL = URL(string: urlString) {
-            // Many instances return 401 unless `videoFileToken` is on the query, even when the path
-            // does not contain "/private/". When logged in, always prefer the token API + Bearer.
-            if let apiClient, let token = accessToken, !token.isEmpty {
+            if mediaHostDiffersFromAPI {
+                downloadLog.notice(
+                    "federated file host; skip local videoFileToken/OAuth (origin rejects other instance tokens) videoId=\(videoId, privacy: .public) url=\(downloadURLDescription(downloadURL), privacy: .public)"
+                )
+                beginTask(url: downloadURL, meta: meta, bearerToken: nil)
+            } else if let apiClient, let token = accessToken, !token.isEmpty {
+                // Many instances return 401 unless `videoFileToken` is on the query, even when the path
+                // does not contain "/private/". When logged in, always prefer the token API + Bearer.
                 Task {
                     do {
                         let resp: VideoFileTokenResponse = try await apiClient.request(.videoFileToken(id: videoId))
@@ -155,21 +204,39 @@ final class DownloadManager: NSObject, ObservableObject {
                         items.append(URLQueryItem(name: "videoFileToken", value: resp.files.token))
                         components.queryItems = items
                         let tokenizedURL = components.url ?? downloadURL
+                        downloadLog.notice(
+                            "videoFileToken OK videoId=\(videoId, privacy: .public) begin url=\(downloadURLDescription(tokenizedURL), privacy: .public)"
+                        )
                         self.beginTask(url: tokenizedURL, meta: meta, bearerToken: token)
                     } catch {
+                        downloadLog.warning(
+                            "videoFileToken failed; using direct URL with Bearer only videoId=\(videoId, privacy: .public) error=\(error.localizedDescription, privacy: .public) url=\(downloadURLDescription(downloadURL), privacy: .public)"
+                        )
                         self.beginTask(url: downloadURL, meta: meta, bearerToken: token)
                     }
                 }
             } else if downloadURL.path.contains("/private/"), let token = accessToken, !token.isEmpty {
+                downloadLog.notice(
+                    "begin /private/ file URL with Bearer videoId=\(videoId, privacy: .public) url=\(downloadURLDescription(downloadURL), privacy: .public)"
+                )
                 var request = URLRequest(url: downloadURL)
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                 beginTask(request: request, meta: meta)
             } else {
+                downloadLog.notice(
+                    "begin direct download (no videoFileToken path) videoId=\(videoId, privacy: .public) url=\(downloadURLDescription(downloadURL), privacy: .public) bearer=\(accessToken != nil)"
+                )
                 beginTask(url: downloadURL, meta: meta, bearerToken: accessToken)
             }
         } else if let hlsString = hlsPlaylistString, let hlsURL = URL(string: hlsString) {
-            beginHLSExport(url: hlsURL, meta: meta, accessToken: accessToken)
+            downloadLog.notice(
+                "begin HLS export path videoId=\(videoId, privacy: .public) playlist=\(downloadURLDescription(hlsURL), privacy: .public)"
+            )
+            beginHLSExport(url: hlsURL, meta: meta, accessToken: effectiveMediaAccessToken(meta))
         } else {
+            downloadLog.error(
+                "noDownloadableSource videoId=\(videoId, privacy: .public) direct=\(directURLString ?? "nil", privacy: .public) hlsVariant=\(hlsPlaylistString ?? "nil", privacy: .public) masterFallback=\(fallbackPlaylistURLString ?? "nil", privacy: .public)"
+            )
             activeDownloads.removeValue(forKey: videoId)
         }
     }
@@ -323,15 +390,33 @@ final class DownloadManager: NSObject, ObservableObject {
 
     // MARK: - Private
 
+    /// OAuth is only valid on our API host; do not send it to federated origin media URLs.
+    private func effectiveMediaAccessToken(_ meta: PendingDownloadMeta) -> String? {
+        guard !meta.mediaHostDiffersFromAPI else { return nil }
+        guard let t = meta.accessToken, !t.isEmpty else { return nil }
+        return t
+    }
+
     private func beginTask(url: URL, meta: PendingDownloadMeta, bearerToken: String?) {
+        let effectiveBearer = meta.mediaHostDiffersFromAPI ? nil : bearerToken
         var request = URLRequest(url: url)
-        if let token = bearerToken, !token.isEmpty {
+        if let token = effectiveBearer, !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         beginTask(request: request, meta: meta)
     }
 
-    private func beginTask(request: URLRequest, meta: PendingDownloadMeta) {
+    private func beginTask(request incoming: URLRequest, meta: PendingDownloadMeta) {
+        var request = incoming
+        if meta.mediaHostDiffersFromAPI {
+            request.setValue(nil, forHTTPHeaderField: "Authorization")
+        }
+        if let u = request.url {
+            let auth = request.value(forHTTPHeaderField: "Authorization") != nil
+            downloadLog.debug(
+                "URLSession downloadTask videoId=\(meta.videoId, privacy: .public) url=\(downloadURLDescription(u), privacy: .public) authorizationHeader=\(auth)"
+            )
+        }
         let task = urlSession.downloadTask(with: request)
         taskVideoIdMap[task.taskIdentifier] = meta.videoId
         taskMetaMap[task.taskIdentifier] = meta
@@ -345,18 +430,15 @@ final class DownloadManager: NSObject, ObservableObject {
         // Bearer auth on AVURLAsset applies to all sub-requests (manifest, variant playlists,
         // segments). This is more reliable for AVAssetExportSession than reinjectVideoFileToken,
         // which dynamically rewrites the HLS manifest and can confuse the export pipeline.
-        if let token = accessToken, !token.isEmpty {
-            performHLSExport(url: url, meta: meta, accessToken: token)
-        } else {
-            performHLSExport(url: url, meta: meta, accessToken: nil)
-        }
+        performHLSExport(url: url, meta: meta, accessToken: accessToken)
     }
 
     private func performHLSExport(url: URL, meta: PendingDownloadMeta, accessToken: String?) {
         let videoId = meta.videoId
+        let playbackToken: String? = meta.mediaHostDiffersFromAPI ? nil : accessToken
         let asset = AVPlayerViewControllerRepresentable.makeAsset(
             url: url,
-            accessToken: accessToken,
+            accessToken: playbackToken,
             instanceBaseURL: meta.apiClient?.baseURL
         )
 
@@ -364,18 +446,27 @@ final class DownloadManager: NSObject, ObservableObject {
             do {
                 let isPlayable = try await asset.load(.isPlayable)
                 if !isPlayable {
+                    downloadLog.error(
+                        "HLS AVAsset not playable videoId=\(videoId, privacy: .public) url=\(downloadURLDescription(url), privacy: .public)"
+                    )
                     self.activeDownloads[videoId]?.state = .failed
                     self.notifyDownloadFinished(videoId: videoId)
                     return
                 }
             } catch {
+                downloadLog.error(
+                    "HLS asset load failed videoId=\(videoId, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
                 self.activeDownloads[videoId]?.state = .failed
                 self.notifyDownloadFinished(videoId: videoId)
                 return
             }
 
             guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
-                self.fallbackToSegmentDownload(masterURL: url, meta: meta, accessToken: accessToken)
+                downloadLog.notice(
+                    "HLS no AVAssetExportSession; segment fallback videoId=\(videoId, privacy: .public) url=\(downloadURLDescription(url), privacy: .public)"
+                )
+                self.fallbackToSegmentDownload(masterURL: url, meta: meta, accessToken: playbackToken)
                 return
             }
 
@@ -440,8 +531,12 @@ final class DownloadManager: NSObject, ObservableObject {
                     self.notifyDownloadFinished(videoId: videoId)
 
                 case .failed:
+                    let err = exportSession.error?.localizedDescription ?? "nil"
+                    downloadLog.warning(
+                        "HLS AVAssetExportSession failed videoId=\(videoId, privacy: .public) error=\(err, privacy: .public) → segment fallback"
+                    )
                     try? FileManager.default.removeItem(at: outputURL)
-                    self.fallbackToSegmentDownload(masterURL: url, meta: meta, accessToken: accessToken)
+                    self.fallbackToSegmentDownload(masterURL: url, meta: meta, accessToken: playbackToken)
 
                 default:
                     break
@@ -591,6 +686,9 @@ final class DownloadManager: NSObject, ObservableObject {
                 try await downloadAndConcatenateSegments(segInfo: segInfo, meta: meta, accessToken: accessToken)
 
             } catch {
+                downloadLog.error(
+                    "HLS segment pipeline failed videoId=\(videoId, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
                 self.activeDownloads[videoId]?.state = .failed
                 self.notifyDownloadFinished(videoId: videoId)
             }
@@ -771,6 +869,10 @@ extension DownloadManager: URLSessionDownloadDelegate {
                 if authLikeFailure,
                    let hlsStr = meta.fallbackPlaylistURLString,
                    let hlsURL = URL(string: hlsStr), !hlsStr.isEmpty {
+                    let reqURL = downloadTask.originalRequest?.url.map { downloadURLDescription($0) } ?? "nil"
+                    downloadLog.warning(
+                        "directDownload HTTP \(http.statusCode) videoId=\(videoId, privacy: .public) url=\(reqURL, privacy: .public) → retry HLS export fallback=\(downloadURLDescription(hlsURL), privacy: .public)"
+                    )
                     self.taskVideoIdMap.removeValue(forKey: taskId)
                     self.taskMetaMap.removeValue(forKey: taskId)
                     self.speedTrackers.removeValue(forKey: taskId)
@@ -782,10 +884,14 @@ extension DownloadManager: URLSessionDownloadDelegate {
                         bytesPerSecond: 0,
                         state: .downloading
                     )
-                    self.beginHLSExport(url: hlsURL, meta: meta, accessToken: meta.accessToken)
+                    self.beginHLSExport(url: hlsURL, meta: meta, accessToken: self.effectiveMediaAccessToken(meta))
                     return
                 }
 
+                let reqURL = downloadTask.originalRequest?.url.map { downloadURLDescription($0) } ?? "nil"
+                downloadLog.error(
+                    "directDownload HTTP \(http.statusCode) videoId=\(videoId, privacy: .public) url=\(reqURL, privacy: .public) noHLSFallback=\(meta.fallbackPlaylistURLString == nil)"
+                )
                 self.activeDownloads[videoId]?.state = .failed
                 self.taskVideoIdMap.removeValue(forKey: taskId)
                 self.taskMetaMap.removeValue(forKey: taskId)
@@ -812,6 +918,9 @@ extension DownloadManager: URLSessionDownloadDelegate {
         do {
             try FileManager.default.copyItem(at: location, to: tempDest)
         } catch {
+            downloadLog.error(
+                "copy temp download from URLSession failed taskId=\(taskId) error=\(error.localizedDescription, privacy: .public)"
+            )
             return
         }
 
@@ -828,12 +937,18 @@ extension DownloadManager: URLSessionDownloadDelegate {
             do {
                 try FileManager.default.moveItem(at: tempDest, to: finalDest)
             } catch {
+                downloadLog.error(
+                    "move completed download failed videoId=\(meta.videoId, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
                 return
             }
 
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: finalDest.path)[.size] as? Int64) ?? meta.expectedSize
 
             guard Self.isPlausibleVideoFile(at: finalDest, byteCount: fileSize) else {
+                downloadLog.error(
+                    "downloaded file failed validation (wrong type or too small) videoId=\(meta.videoId, privacy: .public) bytes=\(fileSize) pathExt=\(finalDest.pathExtension, privacy: .public)"
+                )
                 try? FileManager.default.removeItem(at: finalDest)
                 self.activeDownloads[meta.videoId]?.state = .failed
                 self.taskVideoIdMap.removeValue(forKey: taskId)
@@ -912,9 +1027,14 @@ extension DownloadManager: URLSessionDownloadDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             guard let videoId = self.taskVideoIdMap[taskId] else { return }
-            if (error as NSError).code == NSURLErrorCancelled {
+            let ns = error as NSError
+            if ns.code == NSURLErrorCancelled {
+                downloadLog.debug("download cancelled videoId=\(videoId, privacy: .public)")
                 self.activeDownloads.removeValue(forKey: videoId)
             } else {
+                downloadLog.error(
+                    "download task error videoId=\(videoId, privacy: .public) code=\(ns.code) domain=\(ns.domain, privacy: .public) description=\(error.localizedDescription, privacy: .public)"
+                )
                 self.activeDownloads[videoId]?.state = .failed
             }
             self.taskVideoIdMap.removeValue(forKey: taskId)

@@ -11,6 +11,16 @@ final class VideoDetailViewModel: ObservableObject {
     @Published var myPlaylists: [VideoPlaylist] = []
     @Published var playlistMessage: String?
 
+    @Published var comments: [VideoComment] = []
+    /// Replies loaded per thread via `GET …/comment-threads/{threadId}` (list often omits them).
+    @Published private(set) var threadReplySupplements: [VideoComment] = []
+    @Published var commentsLoading = false
+    @Published var commentsError: String?
+    @Published var commentDraft = ""
+    @Published var isPostingComment = false
+    @Published var commentPostError: String?
+    @Published var selectedCommentId: String?
+
     private var apiClient: PeerTubeAPIClient?
     private var accountName: String?
     let videoId: String
@@ -115,6 +125,97 @@ final class VideoDetailViewModel: ObservableObject {
             NotificationCenter.default.post(name: .peerTVPlaylistsNeedRefresh, object: nil)
         } catch {
             playlistMessage = "Failed to add to playlist"
+        }
+    }
+
+    // MARK: - Comments
+
+    private var mergedComments: [VideoComment] {
+        var byId: [Int: VideoComment] = [:]
+        for c in comments {
+            if let id = c.commentId { byId[id] = c }
+        }
+        for c in threadReplySupplements {
+            if let id = c.commentId { byId[id] = c }
+        }
+        return Array(byId.values)
+    }
+
+    /// Roots first (newest first), then nested replies in thread order.
+    var commentDisplayRows: [CommentDisplayRow] {
+        CommentDisplayRow.rows(from: mergedComments)
+    }
+
+    func loadComments() async {
+        guard let apiClient else { return }
+        commentsLoading = true
+        commentsError = nil
+        defer { commentsLoading = false }
+        do {
+            let response: VideoCommentsListResponse = try await apiClient.request(
+                .videoCommentThreads(videoId: videoId, start: 0, count: 100, sort: "-createdAt")
+            )
+            selectedCommentId = nil
+            comments = response.data ?? []
+            threadReplySupplements = []
+
+            let roots = comments.filter { $0.isDeleted != true && $0.isRoot }
+            let extras = await withTaskGroup(of: [VideoComment].self) { group -> [VideoComment] in
+                for root in roots {
+                    guard let tid = root.commentId else { continue }
+                    group.addTask {
+                        await self.fetchThreadReplyExtras(threadId: tid)
+                    }
+                }
+                var merged: [VideoComment] = []
+                for await batch in group {
+                    merged.append(contentsOf: batch)
+                }
+                return merged
+            }
+            threadReplySupplements = extras
+        } catch {
+            commentsError = error.localizedDescription
+            comments = []
+            threadReplySupplements = []
+        }
+    }
+
+    private func fetchThreadReplyExtras(threadId: Int) async -> [VideoComment] {
+        guard let apiClient else { return [] }
+        do {
+            let detail: VideoCommentThreadDetailResponse = try await apiClient.request(
+                .videoCommentThreadDetail(videoId: videoId, threadId: threadId)
+            )
+            return flattenCommentBranches(detail.children)
+        } catch {
+            return []
+        }
+    }
+
+    func postComment() async {
+        guard let apiClient else { return }
+        let trimmed = commentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        isPostingComment = true
+        commentPostError = nil
+        defer { isPostingComment = false }
+        do {
+            let _: PostCommentResponse = try await apiClient.request(
+                .postVideoComment(videoId: videoId, text: trimmed)
+            )
+            commentDraft = ""
+            await loadComments()
+        } catch {
+            commentPostError = error.localizedDescription
+        }
+    }
+
+    func toggleCommentSelection(_ id: String) {
+        if selectedCommentId == id {
+            selectedCommentId = nil
+        } else {
+            selectedCommentId = id
         }
     }
 }

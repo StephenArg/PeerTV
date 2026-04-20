@@ -55,6 +55,11 @@ struct VideoDetailView: View {
                             }
 
                             VideoDownloadBar(video: video)
+
+                            Divider()
+                                .padding(.top, 8)
+
+                            VideoCommentsSection(vm: vm)
                         }
                         .frame(maxWidth: .infinity)
                         .focusSection()
@@ -179,6 +184,7 @@ struct VideoDetailView: View {
             if session.tokenStore.accessToken != nil {
                 await vm.loadUserRating()
             }
+            await vm.loadComments()
         }
         .onChange(of: vm.playlistMessage) { message in
             if let message {
@@ -194,7 +200,7 @@ struct VideoDetailView: View {
 
     @ViewBuilder
     private func controlBar(video: Video) -> some View {
-        HStack(spacing: 24) {
+        HStack(spacing: 32) {
             Button {
                 Task { await vm.toggleLike() }
             } label: {
@@ -207,10 +213,12 @@ struct VideoDetailView: View {
                 }
                 .font(.callout)
                 .fontWeight(vm.userRating == "like" ? .semibold : .regular)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 16)
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.card)
+            .frame(maxWidth: .infinity)
 
             Button {
                 Task { await vm.toggleDislike() }
@@ -224,10 +232,12 @@ struct VideoDetailView: View {
                 }
                 .font(.callout)
                 .fontWeight(vm.userRating == "dislike" ? .semibold : .regular)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 16)
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.card)
+            .frame(maxWidth: .infinity)
 
             Button {
                 Task { await vm.loadMyPlaylists() }
@@ -238,11 +248,14 @@ struct VideoDetailView: View {
                     Text("Save")
                 }
                 .font(.callout)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 16)
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.card)
+            .frame(maxWidth: .infinity)
         }
+        .frame(maxWidth: .infinity)
         .overlay(
             Group {
                 if let message = vm.playlistMessage {

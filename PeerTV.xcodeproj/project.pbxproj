@@ -39,6 +39,8 @@
 		A58D68D7D25947CD9D266F51 /* ImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 309EB2AFB32E2CDFC102EA12 /* ImageCache.swift */; };
 		A77979121BA1252EDAA0A317 /* InstanceSetupViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26D4C7B759A31AFD03C8FAA7 /* InstanceSetupViewModel.swift */; };
 		AA11223344556677AABB0001 /* RandomVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0002 /* RandomVideo.swift */; };
+		AA22CC33445566778899AA11 /* VideoComment.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22CC33445566778899AA01 /* VideoComment.swift */; };
+		AA22CC33445566778899AA12 /* VideoCommentsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22CC33445566778899AA02 /* VideoCommentsSection.swift */; };
 		SB33445566778899AABB0001 /* VideoStoryboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = SB33445566778899AABB0002 /* VideoStoryboard.swift */; };
 		ABF234E54442EF8E170F0FEE /* HistoryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19E305693F9917FF2A4524C6 /* HistoryViewModel.swift */; };
 		B9D88D71883BB0362898D0FE /* DebugRawJSONView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8B1529B15FB44BF5769868F /* DebugRawJSONView.swift */; };
@@ -101,6 +103,8 @@
 		97F3CAA913F542F02F4F5391 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
 		987D5472FE53160F9C48E251 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		AA11223344556677AABB0002 /* RandomVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RandomVideo.swift; sourceTree = "<group>"; };
+		AA22CC33445566778899AA01 /* VideoComment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoComment.swift; sourceTree = "<group>"; };
+		AA22CC33445566778899AA02 /* VideoCommentsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCommentsSection.swift; sourceTree = "<group>"; };
 		SB33445566778899AABB0002 /* VideoStoryboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoStoryboard.swift; sourceTree = "<group>"; };
 		AB9C724F3211B902A59CF5F9 /* InstanceConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstanceConfig.swift; sourceTree = "<group>"; };
 		AF82ECF5E9E2749375CC5355 /* SubscriptionsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionsViewModel.swift; sourceTree = "<group>"; };
@@ -262,6 +266,7 @@
 				2194DE259D2983B43AF741C1 /* Subscription.swift */,
 				F35E5F918DA8B8A80F4560A6 /* User.swift */,
 				BC63E4AC368A691A0196DFC3 /* Video.swift */,
+				AA22CC33445566778899AA01 /* VideoComment.swift */,
 				FC39E7133B97E74CEDACFE38 /* VideoChannel.swift */,
 				942FE90E12B0B47F1E47A3B2 /* VideoPlaylist.swift */,
 			);
@@ -302,6 +307,7 @@
 				507C6CEF3CD5735B2A707D14 /* PlaylistDetailView.swift */,
 				007685E525DB1E5C75339E9A /* VideoDetailView.swift */,
 				DD44001122334455AA66BB01 /* VideoDownloadBar.swift */,
+				AA22CC33445566778899AA02 /* VideoCommentsSection.swift */,
 			);
 			path = Detail;
 			sourceTree = "<group>";
@@ -411,6 +417,7 @@
 				C6578A5A6D45933237D4BB0E /* Subscription.swift in Sources */,
 				416EDD1874495B757FB2BB8B /* User.swift in Sources */,
 				613826A582593A2A5D80F582 /* Video.swift in Sources */,
+				AA22CC33445566778899AA11 /* VideoComment.swift in Sources */,
 				F84B537E4C11376642B12792 /* VideoChannel.swift in Sources */,
 				C68FA32F30E6ECA50F217955 /* VideoPlaylist.swift in Sources */,
 				DD22001122334455AA66BB02 /* DownloadedVideo.swift in Sources */,
@@ -441,6 +448,7 @@
 				80BF494B9B3501C478CB4562 /* PlaylistDetailView.swift in Sources */,
 				22D521551DF8D5863D02FEA0 /* VideoDetailView.swift in Sources */,
 				DD44001122334455AA66BB02 /* VideoDownloadBar.swift in Sources */,
+				AA22CC33445566778899AA12 /* VideoCommentsSection.swift in Sources */,
 				048994406577A11E0B516067 /* InstanceSetupView.swift in Sources */,
 				33897146F13A8BB646E04D1F /* LoginView.swift in Sources */,
 				26F3E2262AB6C7BEBF2CDF21 /* PlayerView.swift in Sources */,
