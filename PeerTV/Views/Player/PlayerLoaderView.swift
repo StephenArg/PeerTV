@@ -454,9 +454,11 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
         transportBar = TransportBarController(
             showsQualityButton: !resolutions.isEmpty,
+            showsSkipNextButton: Self.playlistHasNextItem(after: playlistQueue),
             title: title,
             onQualityTapped: { [weak self] in self?.presentQualityMenu() },
-            onSpeedTapped: { [weak self] in self?.presentSpeedMenu() }
+            onSpeedTapped: { [weak self] in self?.presentSpeedMenu() },
+            onSkipNextTapped: { [weak self] in self?.userRequestedSkipToNextPlaylistItem() }
         )
         transportBar?.attach(player: player)
         fetchStoryboards(for: videoId)
@@ -573,27 +575,50 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
     // MARK: - End of item / playlist autoplay
 
+    private static func playlistHasNextItem(after queue: PlaylistPlaybackQueue?) -> Bool {
+        guard let queue else { return false }
+        return queue.currentIndex + 1 < queue.videoIds.count
+    }
+
+    private func refreshSkipNextButtonVisibility() {
+        transportBar?.setShowsSkipNext(Self.playlistHasNextItem(after: playlistQueue))
+    }
+
+    /// Advances to the next playlist item when one exists. Used by end-of-playback autoplay and
+    /// the transport-bar "skip next" control.
+    private func advanceToNextPlaylistItemIfPossible() {
+        guard let queue = playlistQueue,
+              queue.currentIndex + 1 < queue.videoIds.count else { return }
+        let nextId = queue.videoIds[queue.currentIndex + 1]
+        let nextQueue = PlaylistPlaybackQueue(
+            videoIds: queue.videoIds,
+            currentIndex: queue.currentIndex + 1,
+            autoplayEnabled: queue.autoplayEnabled,
+            apiClient: queue.apiClient,
+            accessToken: queue.accessToken
+        )
+        NotificationCenter.default.post(
+            name: .peerTVPlaylistNowPlayingVideoId,
+            object: nil,
+            userInfo: ["videoId": nextId]
+        )
+        Task { @MainActor [weak self] in
+            await self?.transitionToNextPlaylistItem(nextQueue: nextQueue, nextVideoId: nextId)
+        }
+    }
+
+    private func userRequestedSkipToNextPlaylistItem() {
+        guard !isSwitching, Self.playlistHasNextItem(after: playlistQueue) else { return }
+        reportCurrentTime()
+        advanceToNextPlaylistItemIfPossible()
+    }
+
     private func handlePlaybackEnded() {
         reportCurrentTime()
         if let queue = playlistQueue,
            queue.autoplayEnabled,
            queue.currentIndex + 1 < queue.videoIds.count {
-            let nextId = queue.videoIds[queue.currentIndex + 1]
-            let nextQueue = PlaylistPlaybackQueue(
-                videoIds: queue.videoIds,
-                currentIndex: queue.currentIndex + 1,
-                autoplayEnabled: queue.autoplayEnabled,
-                apiClient: queue.apiClient,
-                accessToken: queue.accessToken
-            )
-            NotificationCenter.default.post(
-                name: .peerTVPlaylistNowPlayingVideoId,
-                object: nil,
-                userInfo: ["videoId": nextId]
-            )
-            Task { @MainActor [weak self] in
-                await self?.transitionToNextPlaylistItem(nextQueue: nextQueue, nextVideoId: nextId)
-            }
+            advanceToNextPlaylistItemIfPossible()
             return
         }
         dismissPlayer()
@@ -644,6 +669,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
             videoId = nextVideoId
             playlistQueue = nextQueue
+            refreshSkipNextButtonVisibility()
             resolutions = video.resolutionOptions
             autoURL = url
             // Apply the default-resolution setting to the next item too.

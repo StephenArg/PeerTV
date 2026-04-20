@@ -25,10 +25,13 @@ struct VideoGridView: View {
         ScrollViewReader { scrollProxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 30) {
-                    HStack {
+                    HStack(alignment: .center, spacing: 28) {
                         Text(vm.currentListSort.displayName)
                             .font(.title3)
                             .bold()
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(0)
 
                         HStack(spacing: 35) {
                             Button {
@@ -37,6 +40,7 @@ struct VideoGridView: View {
                                 HStack(spacing: 20) {
                                     Image(systemName: "magnifyingglass")
                                     Text("Search")
+                                        .lineLimit(1)
                                 }
                                 .font(.callout)
                                 .padding(.horizontal, 48)
@@ -50,6 +54,7 @@ struct VideoGridView: View {
                                 HStack(spacing: 20) {
                                     Image(systemName: "arrow.up.arrow.down.circle")
                                     Text("Sort")
+                                        .lineLimit(1)
                                 }
                                 .font(.callout)
                                 .padding(.horizontal, 48)
@@ -63,6 +68,8 @@ struct VideoGridView: View {
                                 HStack(spacing: 20) {
                                     Image(systemName: "globe")
                                     Text("Platforms")
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.72)
                                 }
                                 .font(.callout)
                                 .padding(.horizontal, 48)
@@ -70,6 +77,8 @@ struct VideoGridView: View {
                             }
                             .buttonStyle(.card)
                         }
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(1)
                     }
                     .padding(.horizontal, 50)
 

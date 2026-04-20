@@ -301,6 +301,7 @@ final class TransportBarOverlayView: UIView {
     let trackControl = FocusableTrackControl()
     let titleLabel = UILabel()
     let qualityButton: UIButton
+    let skipNextButton: UIButton
     let speedButton: UIButton
     let currentTimeLabel = UILabel()
     let remainingTimeLabel = UILabel()
@@ -311,6 +312,11 @@ final class TransportBarOverlayView: UIView {
     private var thumbnailXConstraint: NSLayoutConstraint!
     private let scrim = GradientView()
     private let buttonStack = UIStackView()
+
+    /// Shown only when playing from a playlist with another item after the current one.
+    var showsSkipNextButton: Bool = false {
+        didSet { skipNextButton.isHidden = !showsSkipNextButton }
+    }
 
     var showsQualityButton: Bool = true {
         didSet { qualityButton.isHidden = !showsQualityButton }
@@ -345,6 +351,7 @@ final class TransportBarOverlayView: UIView {
 
     override init(frame: CGRect) {
         self.qualityButton = Self.makeIconButton(symbol: "sparkles.tv")
+        self.skipNextButton = Self.makeIconButton(symbol: "forward.end.fill")
         self.speedButton = Self.makeIconButton(symbol: "gauge.with.dots.needle.67percent")
         super.init(frame: frame)
         setup()
@@ -389,7 +396,10 @@ final class TransportBarOverlayView: UIView {
         titleLabel.shadowOffset = CGSize(width: 0, height: 1)
 
         buttonStack.addArrangedSubview(qualityButton)
+        buttonStack.addArrangedSubview(skipNextButton)
         buttonStack.addArrangedSubview(speedButton)
+        skipNextButton.isHidden = true
+        skipNextButton.accessibilityLabel = "Play next in playlist"
         buttonStack.axis = .horizontal
         buttonStack.spacing = TransportBarMetrics.buttonRowSpacing
         buttonStack.translatesAutoresizingMaskIntoConstraints = false
@@ -733,26 +743,32 @@ final class TransportBarController: NSObject {
 
     private let onQualityTapped: () -> Void
     private let onSpeedTapped: () -> Void
+    private let onSkipNextTapped: (() -> Void)?
     private let showsQualityButton: Bool
     private var title: String
 
     init(
         showsQualityButton: Bool,
+        showsSkipNextButton: Bool = false,
         title: String,
         onQualityTapped: @escaping () -> Void,
-        onSpeedTapped: @escaping () -> Void
+        onSpeedTapped: @escaping () -> Void,
+        onSkipNextTapped: (() -> Void)? = nil
     ) {
         self.showsQualityButton = showsQualityButton
         self.title = title
         self.onQualityTapped = onQualityTapped
         self.onSpeedTapped = onSpeedTapped
+        self.onSkipNextTapped = onSkipNextTapped
         super.init()
 
         rootView.barView.showsQualityButton = showsQualityButton
+        rootView.barView.showsSkipNextButton = showsSkipNextButton
         rootView.barView.titleLabel.text = title
 
         rootView.barView.qualityButton.addTarget(self, action: #selector(qualityPressed), for: .primaryActionTriggered)
         rootView.barView.speedButton.addTarget(self, action: #selector(speedPressed), for: .primaryActionTriggered)
+        rootView.barView.skipNextButton.addTarget(self, action: #selector(skipNextPressed), for: .primaryActionTriggered)
 
         rootView.barView.trackControl.onArrowPressBegan = { [weak self] d in self?.handleArrowPressBegan(direction: d) }
         rootView.barView.trackControl.onArrowPressEnded = { [weak self] d in self?.handleArrowPressEnded(direction: d) }
@@ -767,6 +783,10 @@ final class TransportBarController: NSObject {
     func setTitle(_ newTitle: String) {
         title = newTitle
         rootView.barView.titleLabel.text = newTitle
+    }
+
+    func setShowsSkipNext(_ show: Bool) {
+        rootView.barView.showsSkipNextButton = show
     }
 
     /// Timestamp of the most recent Menu press this controller consumed. Used to debounce
@@ -1020,7 +1040,9 @@ final class TransportBarController: NSObject {
     /// and `scheduleAutoHideIfNeeded` to suppress hiding while the user is interacting with the
     /// chrome buttons above the scrubber.
     private var isChromeButtonFocused: Bool {
-        rootView.barView.qualityButton.isFocused || rootView.barView.speedButton.isFocused
+        rootView.barView.qualityButton.isFocused
+            || rootView.barView.skipNextButton.isFocused
+            || rootView.barView.speedButton.isFocused
     }
 
     // MARK: - Actions (buttons / gestures / arrows)
@@ -1285,6 +1307,11 @@ final class TransportBarController: NSObject {
 
     @objc private func speedPressed() {
         onSpeedTapped()
+        showBarAndResetTimer()
+    }
+
+    @objc private func skipNextPressed() {
+        onSkipNextTapped?()
         showBarAndResetTimer()
     }
 

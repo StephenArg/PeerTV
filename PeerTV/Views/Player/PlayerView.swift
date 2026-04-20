@@ -120,9 +120,11 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
             // Transport bar is created on first access (before container is built).
             let bar = TransportBarController(
                 showsQualityButton: !resolutions.isEmpty,
+                showsSkipNextButton: false,
                 title: title,
                 onQualityTapped: { [weak self] in self?.presentQualityMenu() },
-                onSpeedTapped: { [weak self] in self?.presentSpeedMenu() }
+                onSpeedTapped: { [weak self] in self?.presentSpeedMenu() },
+                onSkipNextTapped: nil
             )
             transportBar = bar
             return bar.rootView
@@ -143,9 +145,11 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
             if transportBar == nil {
                 transportBar = TransportBarController(
                     showsQualityButton: !resolutions.isEmpty,
+                    showsSkipNextButton: false,
                     title: title,
                     onQualityTapped: { [weak self] in self?.presentQualityMenu() },
-                    onSpeedTapped: { [weak self] in self?.presentSpeedMenu() }
+                    onSpeedTapped: { [weak self] in self?.presentSpeedMenu() },
+                    onSkipNextTapped: nil
                 )
             }
             transportBar?.attach(player: player)
