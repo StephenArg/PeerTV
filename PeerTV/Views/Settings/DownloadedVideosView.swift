@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DownloadedVideosView: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var editMode = false
     @State private var showRemoveAllConfirmation = false
@@ -49,11 +50,25 @@ struct DownloadedVideosView: View {
                 }
 
                 if downloadManager.downloadedVideos.isEmpty {
-                    ContentUnavailableView(
-                        "No Downloads",
-                        systemImage: "arrow.down.circle",
-                        description: Text("Videos you download will appear here.")
-                    )
+                    VStack(spacing: 28) {
+                        ContentUnavailableView(
+                            "No Downloads",
+                            systemImage: "arrow.down.circle",
+                            description: Text("Videos you download will appear here.")
+                        )
+                        Button {
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "chevron.backward")
+                                Text("Back")
+                            }
+                            .font(.callout)
+                            .padding(.horizontal, 28)
+                            .padding(.vertical, 14)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 60)
                 } else {

@@ -74,6 +74,9 @@ final class DownloadManager: NSObject, ObservableObject {
     private var batchApiClient: PeerTubeAPIClient?
     private var batchCurrentVideoId: String?
 
+    /// Per-account offline library; `nil` before any account is active (empty library).
+    private var activeDownloadAccountId: UUID?
+
     private struct PendingDownloadMeta {
         let videoId: String
         let name: String
@@ -96,16 +99,33 @@ final class DownloadManager: NSObject, ObservableObject {
         var lastTime: Date = Date()
     }
 
-    private nonisolated static var downloadsDirectory: URL {
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let dir = caches.appendingPathComponent("Downloads", isDirectory: true)
+    private static func cachesDirectory() -> URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+    }
+
+    private func accountRootURL(for id: UUID) -> URL {
+        let root = Self.cachesDirectory().appendingPathComponent("Accounts/\(id.uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    /// When no account is active, uses legacy cache layout (empty until an account activates).
+    private func downloadsDirectoryURL() -> URL {
+        guard let id = activeDownloadAccountId else {
+            let dir = Self.cachesDirectory().appendingPathComponent("Downloads", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
+        let dir = accountRootURL(for: id).appendingPathComponent("Downloads", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    private nonisolated static var metadataURL: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("downloads-metadata.json")
+    private func metadataURL() -> URL {
+        guard let id = activeDownloadAccountId else {
+            return Self.cachesDirectory().appendingPathComponent("downloads-metadata.json")
+        }
+        return accountRootURL(for: id).appendingPathComponent("downloads-metadata.json")
     }
 
     override init() {
@@ -114,7 +134,61 @@ final class DownloadManager: NSObject, ObservableObject {
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 60 * 60 * 4
         urlSession = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }
+
+    /// Moves pre-multi-account `Caches/Downloads` + `downloads-metadata.json` into `Caches/Accounts/<id>/`.
+    func migrateLegacyDownloadsIfNeeded(intoAccountId id: UUID) {
+        let fm = FileManager.default
+        let caches = Self.cachesDirectory()
+        let legacyDownloads = caches.appendingPathComponent("Downloads", isDirectory: true)
+        let legacyMeta = caches.appendingPathComponent("downloads-metadata.json")
+        let destRoot = caches.appendingPathComponent("Accounts/\(id.uuidString)", isDirectory: true)
+        let destDownloads = destRoot.appendingPathComponent("Downloads", isDirectory: true)
+        let destMeta = destRoot.appendingPathComponent("downloads-metadata.json")
+
+        let legacyHasData = fm.fileExists(atPath: legacyMeta.path)
+            || (fm.fileExists(atPath: legacyDownloads.path) && (try? fm.contentsOfDirectory(atPath: legacyDownloads.path))?.isEmpty == false)
+
+        guard legacyHasData else { return }
+
+        try? fm.createDirectory(at: destRoot, withIntermediateDirectories: true)
+
+        if fm.fileExists(atPath: legacyDownloads.path) {
+            if !fm.fileExists(atPath: destDownloads.path) {
+                try? fm.moveItem(at: legacyDownloads, to: destDownloads)
+            }
+        }
+        if fm.fileExists(atPath: legacyMeta.path) {
+            if !fm.fileExists(atPath: destMeta.path) {
+                try? fm.moveItem(at: legacyMeta, to: destMeta)
+            }
+        }
+    }
+
+    /// Cancels in-flight work and loads metadata for the given account (`nil` = no account / empty library).
+    func setActiveAccount(_ id: UUID?) {
+        cancelAllDownloadActivity()
+        activeDownloadAccountId = id
+        downloadedVideos = []
+        guard id != nil else { return }
         loadMetadata()
+        pruneInvalidDownloadEntries()
+    }
+
+    private func cancelAllDownloadActivity() {
+        cancelPlaylistBatch()
+        for videoId in Array(activeExportSessions.keys) {
+            activeExportSessions[videoId]?.cancelExport()
+            activeExportSessions.removeValue(forKey: videoId)
+            exportProgressTimers.removeValue(forKey: videoId)?.invalidate()
+        }
+        urlSession.getAllTasks { tasks in
+            tasks.forEach { $0.cancel() }
+        }
+        taskVideoIdMap.removeAll()
+        taskMetaMap.removeAll()
+        speedTrackers.removeAll()
+        activeDownloads.removeAll()
     }
 
     // MARK: - Public API
@@ -259,7 +333,7 @@ final class DownloadManager: NSObject, ObservableObject {
 
     func removeDownload(videoId: String) {
         if let entry = downloadedVideos.first(where: { $0.videoId == videoId }) {
-            let fileURL = Self.downloadsDirectory.appendingPathComponent(entry.localFilename)
+            let fileURL = downloadsDirectoryURL().appendingPathComponent(entry.localFilename)
             try? FileManager.default.removeItem(at: fileURL)
         }
         downloadedVideos.removeAll { $0.videoId == videoId }
@@ -268,7 +342,7 @@ final class DownloadManager: NSObject, ObservableObject {
 
     func removeAllDownloads() {
         for entry in downloadedVideos {
-            let fileURL = Self.downloadsDirectory.appendingPathComponent(entry.localFilename)
+            let fileURL = downloadsDirectoryURL().appendingPathComponent(entry.localFilename)
             try? FileManager.default.removeItem(at: fileURL)
         }
         downloadedVideos.removeAll()
@@ -279,7 +353,7 @@ final class DownloadManager: NSObject, ObservableObject {
         guard let entry = downloadedVideos.first(where: { $0.videoId == videoId }) else {
             return nil
         }
-        let url = Self.downloadsDirectory.appendingPathComponent(entry.localFilename)
+        let url = downloadsDirectoryURL().appendingPathComponent(entry.localFilename)
         guard FileManager.default.fileExists(atPath: url.path) else {
             removeDownload(videoId: videoId)
             return nil
@@ -470,7 +544,7 @@ final class DownloadManager: NSObject, ObservableObject {
                 return
             }
 
-            let downloadsDir = Self.downloadsDirectory
+            let downloadsDir = downloadsDirectoryURL()
             if !FileManager.default.fileExists(atPath: downloadsDir.path) {
                 try? FileManager.default.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
             }
@@ -704,7 +778,7 @@ final class DownloadManager: NSObject, ObservableObject {
         let hasFMP4Init = segInfo.initSegmentURL != nil
         let filename = "\(videoId).mp4"
 
-        let downloadsDir = Self.downloadsDirectory
+        let downloadsDir = downloadsDirectoryURL()
         if !FileManager.default.fileExists(atPath: downloadsDir.path) {
             try FileManager.default.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
         }
@@ -811,7 +885,7 @@ final class DownloadManager: NSObject, ObservableObject {
     }
 
     private func loadMetadata() {
-        guard let data = try? Data(contentsOf: Self.metadataURL) else { return }
+        guard let data = try? Data(contentsOf: metadataURL()) else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         downloadedVideos = (try? decoder.decode([DownloadedVideo].self, from: data)) ?? []
@@ -820,7 +894,7 @@ final class DownloadManager: NSObject, ObservableObject {
 
     /// Drops metadata (and files) that are missing, tiny, or not valid media (e.g. old HTTP error saves).
     private func pruneInvalidDownloadEntries() {
-        let dir = Self.downloadsDirectory
+        let dir = downloadsDirectoryURL()
         let before = downloadedVideos.count
         downloadedVideos.removeAll { entry in
             let url = dir.appendingPathComponent(entry.localFilename)
@@ -844,7 +918,7 @@ final class DownloadManager: NSObject, ObservableObject {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = .prettyPrinted
         guard let data = try? encoder.encode(downloadedVideos) else { return }
-        try? data.write(to: Self.metadataURL, options: .atomic)
+        try? data.write(to: metadataURL(), options: .atomic)
     }
 }
 
@@ -907,7 +981,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
             .flatMap { URL(string: $0)?.pathExtension }
         let ext = (suggestedExt?.isEmpty == false) ? suggestedExt! : "mp4"
 
-        let downloadsDir = Self.downloadsDirectory
+        let downloadsDir = AccountPersistence.resolvedDownloadsDirectoryURL()
         if !FileManager.default.fileExists(atPath: downloadsDir.path) {
             try? FileManager.default.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
         }

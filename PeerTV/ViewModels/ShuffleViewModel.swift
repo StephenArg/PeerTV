@@ -28,6 +28,12 @@ final class ShuffleViewModel: ObservableObject {
                 .filter { !existingIds.contains($0.stableId) }
             converted = await Self.enrichChannelAvatars(converted, apiClient: apiClient)
             videos.append(contentsOf: converted)
+        } catch let error as APIError {
+            if case .httpError(let code, _) = error, code == 404 {
+                errorMessage = "Random plugin may not be installed on this instance"
+            } else {
+                errorMessage = error.localizedDescription
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

@@ -9,7 +9,7 @@ final class LoginViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
 
-    func login(using session: SessionStore) async {
+    func login(using host: any AccountLoginHost) async {
         guard !username.isEmpty, !password.isEmpty else {
             errorMessage = "Enter both username and password."
             return
@@ -18,7 +18,7 @@ final class LoginViewModel: ObservableObject {
             errorMessage = "Enter your authenticator code."
             return
         }
-        guard let baseURL = session.baseURL else {
+        guard let baseURL = host.baseURL else {
             errorMessage = "No instance configured."
             return
         }
@@ -27,13 +27,13 @@ final class LoginViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
-            let tokens = try await session.oauthService.login(
+            let tokens = try await host.oauthService.login(
                 baseURL: baseURL,
                 username: username,
                 password: password,
                 otpCode: needsOTP ? otpCode : nil
             )
-            session.didLogin(tokens: tokens, username: username)
+            host.didLogin(tokens: tokens, username: username)
         } catch let error as APIError {
             if case .httpError(let code, let data) = error,
                (code == 401 || code == 400),

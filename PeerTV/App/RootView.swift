@@ -13,6 +13,7 @@ struct RootView: View {
                 LoginView()
             case .authenticated:
                 MainTabView()
+                    .id(session.mainTabViewIdentity)
             }
         }
         .peerTVAppTheme(appThemeStore.theme)

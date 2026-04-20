@@ -7,7 +7,7 @@ final class InstanceSetupViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var instanceName: String?
 
-    func validate(using session: SessionStore) async {
+    func validate(using host: any AccountLoginHost, onSuccess: (() -> Void)? = nil) async {
         errorMessage = nil
         guard let url = URL(string: urlText),
               url.scheme == "https" || url.scheme == "http" else {
@@ -19,12 +19,14 @@ final class InstanceSetupViewModel: ObservableObject {
 
         let configURL = url.appendingPathComponent("/api/v1/config")
         do {
-            let data = try await session.apiClient.getData(from: configURL)
+            let data = try await host.apiClient.getData(from: configURL)
             let config = try JSONDecoder().decode(InstanceConfig.self, from: data)
             instanceName = config.instance?.name
-            session.setInstance(url)
+            host.setInstance(url)
+            onSuccess?()
         } catch {
             errorMessage = "Could not reach PeerTube instance. Check the URL and try again."
         }
     }
 }
+
