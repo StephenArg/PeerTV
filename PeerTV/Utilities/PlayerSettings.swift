@@ -67,6 +67,22 @@ enum DefaultResolution: Int, CaseIterable, Identifiable {
 enum PlayerSettings {
     static let bufferCapKey = "PeerTV.bufferCapMB"
     static let defaultResolutionKey = "PeerTV.defaultResolutionId"
+    /// BCP-47 language id of the last selected caption track, or unset when captions are Off.
+    static let preferredCaptionLanguageKey = "PeerTV.preferredCaptionLanguage"
+
+    static var preferredCaptionLanguage: String? {
+        get {
+            let s = UserDefaults.standard.string(forKey: preferredCaptionLanguageKey)
+            return (s?.isEmpty == false) ? s : nil
+        }
+        set {
+            if let newValue, !newValue.isEmpty {
+                UserDefaults.standard.set(newValue, forKey: preferredCaptionLanguageKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: preferredCaptionLanguageKey)
+            }
+        }
+    }
 
     /// Selected buffer cap. Defaults to 1 GB the first time the app launches.
     static var bufferCap: BufferCap {

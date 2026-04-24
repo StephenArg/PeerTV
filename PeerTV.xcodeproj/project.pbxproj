@@ -75,6 +75,9 @@
 		PP22334444556677AABB0001 /* TransportBarOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = PP22334444556677AABB0002 /* TransportBarOverlay.swift */; };
 		PS22334455667788AABB0001 /* PlayerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = PS22334455667788AABB0002 /* PlayerSettings.swift */; };
 		SB33445566778899AABB0001 /* VideoStoryboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = SB33445566778899AABB0002 /* VideoStoryboard.swift */; };
+		VC11223344556677AABB0001 /* VideoCaption.swift in Sources */ = {isa = PBXBuildFile; fileRef = VC11223344556677AABB0002 /* VideoCaption.swift */; };
+		WV11223344556677AABB0001 /* WebVTTParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = WV11223344556677AABB0002 /* WebVTTParser.swift */; };
+		CO11223344556677AABB0001 /* CaptionOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CO11223344556677AABB0002 /* CaptionOverlayView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -148,6 +151,9 @@
 		PP22334444556677AABB0002 /* TransportBarOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportBarOverlay.swift; sourceTree = "<group>"; };
 		PS22334455667788AABB0002 /* PlayerSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerSettings.swift; sourceTree = "<group>"; };
 		SB33445566778899AABB0002 /* VideoStoryboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoStoryboard.swift; sourceTree = "<group>"; };
+		VC11223344556677AABB0002 /* VideoCaption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCaption.swift; sourceTree = "<group>"; };
+		WV11223344556677AABB0002 /* WebVTTParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebVTTParser.swift; sourceTree = "<group>"; };
+		CO11223344556677AABB0002 /* CaptionOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionOverlayView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -235,6 +241,7 @@
 		6A4CD01772248D6F0B04473E /* Player */ = {
 			isa = PBXGroup;
 			children = (
+				CO11223344556677AABB0002 /* CaptionOverlayView.swift */,
 				FD930FB67E78919F51B313DD /* PlayerView.swift */,
 				DD11223344556677AABB0002 /* PlayerLoaderView.swift */,
 				PP11223344556677AABB0002 /* PlayerLoadingOverlay.swift */,
@@ -275,6 +282,7 @@
 				1E35934C57A189BB150E61AE /* PaginatedResponse.swift */,
 				AA11223344556677AABB0002 /* RandomVideo.swift */,
 				SB33445566778899AABB0002 /* VideoStoryboard.swift */,
+				VC11223344556677AABB0002 /* VideoCaption.swift */,
 				2194DE259D2983B43AF741C1 /* Subscription.swift */,
 				F35E5F918DA8B8A80F4560A6 /* User.swift */,
 				BC63E4AC368A691A0196DFC3 /* Video.swift */,
@@ -351,6 +359,7 @@
 				F6BC9C2DE9B71E55CB67457F /* DebugFlags.swift */,
 				309EB2AFB32E2CDFC102EA12 /* ImageCache.swift */,
 				PS22334455667788AABB0002 /* PlayerSettings.swift */,
+				WV11223344556677AABB0002 /* WebVTTParser.swift */,
 				BB11001122334455AA66BB01 /* TabBarControllerFocusLock.swift */,
 				08E2476F69BB53E8D572601B /* ThumbnailURL.swift */,
 			);
@@ -443,6 +452,7 @@
 				C63231B87BA379DD1729BEFF /* TokenStore.swift in Sources */,
 				2BA8973501BED0219707B68F /* DebugFlags.swift in Sources */,
 				PS22334455667788AABB0001 /* PlayerSettings.swift in Sources */,
+				WV11223344556677AABB0001 /* WebVTTParser.swift in Sources */,
 				A58D68D7D25947CD9D266F51 /* ImageCache.swift in Sources */,
 				D465A444AB99F93D4FBC639D /* ThumbnailURL.swift in Sources */,
 				BB11001122334455AA66BB02 /* TabBarControllerFocusLock.swift in Sources */,
@@ -471,6 +481,7 @@
 				DD11223344556677AABB0001 /* PlayerLoaderView.swift in Sources */,
 				PP11223344556677AABB0001 /* PlayerLoadingOverlay.swift in Sources */,
 				PP22334444556677AABB0001 /* TransportBarOverlay.swift in Sources */,
+				CO11223344556677AABB0001 /* CaptionOverlayView.swift in Sources */,
 				F73A4ACEDD46711AA66A840C /* SettingsView.swift in Sources */,
 				DD55001122334455AA66BB02 /* DownloadedVideosView.swift in Sources */,
 				563EC8FE6C62B36776184138 /* ChannelsListView.swift in Sources */,
@@ -481,6 +492,7 @@
 				2BBF6DC481B447AC6214EDAC /* VideoGridView.swift in Sources */,
 				AA11223344556677AABB0001 /* RandomVideo.swift in Sources */,
 				SB33445566778899AABB0001 /* VideoStoryboard.swift in Sources */,
+				VC11223344556677AABB0001 /* VideoCaption.swift in Sources */,
 				CC11223344556677AABB0001 /* ShuffleViewModel.swift in Sources */,
 				EE11223344556677AABB0001 /* ShuffleView.swift in Sources */,
 				FF11223344556677AABB0001 /* SearchViewModel.swift in Sources */,
@@ -496,7 +508,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = R6WYB662P7;
 				INFOPLIST_FILE = PeerTV/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PeerTV;
@@ -553,7 +565,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = R6WYB662P7;
 				INFOPLIST_FILE = PeerTV/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PeerTV;

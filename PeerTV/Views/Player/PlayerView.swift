@@ -59,6 +59,10 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
             overlayRoot: context.coordinator.transportBarRootView
         )
         context.coordinator.container = container
+        context.coordinator.wireCaptionTimeUpdates(to: container)
+        container.onPlayPausePress = { [weak coordinator = context.coordinator] in
+            coordinator?.handlePlayPausePress()
+        }
 
         player.play()
         return container
@@ -110,6 +114,11 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
         private let title: String
         private var currentLabel: String = "Auto"
         private var currentSpeed: Float = 1.0
+        /// Playback rate captured when the temporary touch-hold boost latched (non-nil =>
+        /// boost is active). Restored on finger-lift. See `PlayerCoordinator` for the full
+        /// rationale — short version: use live `player.rate` so the restore matches what the
+        /// user was actually hearing.
+        private var rateBeforeTouchHoldBoost: Float?
         private var statusObservation: NSKeyValueObservation?
         private var loadingOverlay: UIView?
         private var isSwitching = false
@@ -149,10 +158,63 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
                     title: title,
                     onQualityTapped: { [weak self] in self?.presentQualityMenu() },
                     onSpeedTapped: { [weak self] in self?.presentSpeedMenu() },
-                    onSkipNextTapped: nil
+                    onCaptionsTapped: nil,
+                    onSkipNextTapped: nil,
+                    onSpeedHold: { [weak self] in self?.toggleSpeedHold() },
+                    onTouchHoldBegan: { [weak self] in self?.startTouchHoldBoost() },
+                    onTouchHoldEnded: { [weak self] in self?.endTouchHoldBoost() }
                 )
             }
             transportBar?.attach(player: player)
+        }
+
+        /// Hooks periodic playback time into the caption overlay (SwiftUI player has no PeerTube captions).
+        func wireCaptionTimeUpdates(to container: PlayerContainerViewController) {
+            transportBar?.onTimeUpdate = { [weak container] t in
+                container?.captionOverlay.setCurrentTime(t)
+            }
+        }
+
+        func handlePlayPausePress() {
+            transportBar?.handlePlayPausePress()
+        }
+
+        /// Toggles the playback rate between 2x and 1x when the user long-presses the
+        /// touchpad click (`.select`). Mirrors the behavior in `PlayerCoordinator` (see
+        /// comments there) — always applies the rate (even if paused, so the gesture gives
+        /// instant feedback), updates `currentSpeed` so resolution swaps reapply the new
+        /// rate, and reads the live `player.rate` instead of the stored `currentSpeed`
+        /// since the latter can go stale after a tap-pause-then-tap-play cycle (AVPlayer's
+        /// `play()` always snaps rate back to 1.0).
+        private func toggleSpeedHold() {
+            let fast: Float = 2.0
+            let currentRate = player?.rate ?? 1.0
+            let newSpeed: Float = abs(currentRate - fast) < 0.001 ? 1.0 : fast
+            currentSpeed = newSpeed
+            player?.rate = newSpeed
+            transportBar?.showSpeedNotification("\(Int(newSpeed))x")
+        }
+
+        /// Touchpad-hold temporary 2x boost. Mirrors the implementation in
+        /// `PlayerCoordinator.startTouchHoldBoost`; see there for the full rationale. Skipped
+        /// while paused so the user's scrub-while-paused flow (pan gesture) is unaffected.
+        private func startTouchHoldBoost() {
+            guard let player else { return }
+            guard player.timeControlStatus != .paused else { return }
+            guard rateBeforeTouchHoldBoost == nil else { return }
+
+            rateBeforeTouchHoldBoost = player.rate
+            player.rate = 2.0
+        }
+
+        /// Releases the temporary boost started by `startTouchHoldBoost`. Leaves the player
+        /// alone if something paused it during the boost (we don't want to yank playback back
+        /// to 2x against the user's explicit pause action).
+        private func endTouchHoldBoost() {
+            guard let saved = rateBeforeTouchHoldBoost else { return }
+            rateBeforeTouchHoldBoost = nil
+            guard let player, player.rate > 0 else { return }
+            player.rate = saved
         }
 
         // MARK: Delegate

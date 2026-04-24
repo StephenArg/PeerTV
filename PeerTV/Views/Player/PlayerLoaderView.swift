@@ -52,6 +52,7 @@ final class PlayerPresenter {
 
         if let localURL = DownloadManager.shared.localFileURL(for: videoId) {
             let localTitle = DownloadManager.shared.downloadedVideos.first(where: { $0.videoId == videoId })?.name ?? ""
+            let prefetch = DownloadManager.shared.localPeerTubeCaptions(for: videoId)
             // Local downloads have no resolution choice; play the file as-is.
             presentPlayer(
                 url: localURL,
@@ -63,7 +64,8 @@ final class PlayerPresenter {
                 title: localTitle,
                 apiClient: apiClient,
                 playlistQueue: playlistQueue,
-                isLocalDownload: true
+                isLocalDownload: true,
+                prefetchedCaptions: prefetch.isEmpty ? nil : prefetch
             )
             return
         }
@@ -250,7 +252,8 @@ final class PlayerPresenter {
         title: String,
         apiClient: PeerTubeAPIClient,
         playlistQueue: PlaylistPlaybackQueue?,
-        isLocalDownload: Bool
+        isLocalDownload: Bool,
+        prefetchedCaptions: [PeerTubeCaption]? = nil
     ) {
         guard let root = Self.keyWindow?.rootViewController else {
             PlaybackLog.log.error("presentPlayer: no root VC videoId=\(videoId, privacy: .public)")
@@ -289,7 +292,8 @@ final class PlayerPresenter {
             apiClient: apiClient,
             playlistQueue: playlistQueue,
             isLocalDownload: isLocalDownload,
-            instanceBaseURL: apiClient.baseURL
+            instanceBaseURL: apiClient.baseURL,
+            prefetchedCaptions: prefetchedCaptions
         ) { [weak self] in
             self?.isPresenting = false
         }
@@ -301,6 +305,7 @@ final class PlayerPresenter {
             overlayRoot: coordinator.transportBarRootView
         )
         coordinator.containerController = container
+        coordinator.wireCaptionOverlay(using: container)
         container.onDismissed = { [weak coordinator] in
             coordinator?.performDismissCleanup()
         }
@@ -308,6 +313,9 @@ final class PlayerPresenter {
         // pending visual-scrub commit is cancelled in place instead of closing the player.
         container.shouldConsumeMenuPress = { [weak coordinator] in
             coordinator?.handleMenuPressIfNeeded() ?? false
+        }
+        container.onPlayPausePress = { [weak coordinator] in
+            coordinator?.handlePlayPausePress()
         }
 
         objc_setAssociatedObject(
@@ -405,6 +413,12 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private var playlistQueue: PlaylistPlaybackQueue?
     private var currentLabel: String
     private var currentSpeed: Float = 1.0
+    /// Playback rate captured when the user's finger first latched the temporary touch-hold
+    /// boost (non-nil => boost is active). Restored on finger-lift. We use `player.rate` at
+    /// the moment of latching rather than `currentSpeed` so the restore matches what the user
+    /// was actually hearing, even if the tracked speed had drifted (e.g. after a play-pause
+    /// cycle resets rate to 1.0).
+    private var rateBeforeTouchHoldBoost: Float?
     private var statusObservation: NSKeyValueObservation?
     private var initialLoadObservation: NSKeyValueObservation?
     private var loadingOverlay: UIView?
@@ -414,6 +428,9 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private let isLocalDownload: Bool
     private var transportBar: TransportBarController?
     private var title: String
+    private var captions: [PeerTubeCaption] = []
+    /// Currently displayed caption track (`nil` = Off).
+    private var selectedCaptionLanguage: String?
 
     private static let speeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
     private static let watchReportInterval: Double = 30
@@ -424,6 +441,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
          playlistQueue: PlaylistPlaybackQueue?,
          isLocalDownload: Bool,
          instanceBaseURL: URL?,
+         prefetchedCaptions: [PeerTubeCaption]? = nil,
          onDismiss: @escaping () -> Void) {
         self.resolutions = resolutions
         self.autoURL = autoURL
@@ -458,10 +476,134 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             title: title,
             onQualityTapped: { [weak self] in self?.presentQualityMenu() },
             onSpeedTapped: { [weak self] in self?.presentSpeedMenu() },
-            onSkipNextTapped: { [weak self] in self?.userRequestedSkipToNextPlaylistItem() }
+            onCaptionsTapped: { [weak self] in self?.presentCaptionsMenu() },
+            onSkipNextTapped: { [weak self] in self?.userRequestedSkipToNextPlaylistItem() },
+            onSpeedHold: { [weak self] in self?.toggleSpeedHold() },
+            onTouchHoldBegan: { [weak self] in self?.startTouchHoldBoost() },
+            onTouchHoldEnded: { [weak self] in self?.endTouchHoldBoost() }
         )
         transportBar?.attach(player: player)
         fetchStoryboards(for: videoId)
+        if let pre = prefetchedCaptions, !pre.isEmpty {
+            receivedCaptionsList(pre)
+        } else if !isLocalDownload {
+            fetchCaptions(for: videoId)
+        }
+    }
+
+    func wireCaptionOverlay(using container: PlayerContainerViewController) {
+        transportBar?.onTimeUpdate = { [weak container] t in
+            container?.captionOverlay.setCurrentTime(t)
+        }
+    }
+
+    private func captionOverlayHost() -> CaptionOverlayView? {
+        (containerController as? PlayerContainerViewController)?.captionOverlay
+    }
+
+    private func fetchCaptions(for id: String) {
+        guard let apiClient else { return }
+        Task { [weak self, vid = id] in
+            await self?.loadCaptionsFromNetwork(id: vid, apiClient: apiClient)
+        }
+    }
+
+    private func loadCaptionsFromNetwork(id: String, apiClient: PeerTubeAPIClient) async {
+        do {
+            let data = try await apiClient.rawRequest(.videoCaptions(id: id))
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let resp = try decoder.decode(VideoCaptionsResponse.self, from: data)
+            let list = (resp.data ?? []).peerTubeCaptions(instanceBase: self.instanceBaseURL)
+            await MainActor.run { [weak self] in
+                guard let self, self.videoId == id else { return }
+                self.receivedCaptionsList(list)
+            }
+        } catch {
+            PlaybackLog.log.notice("captions list unavailable videoId=\(id, privacy: .public) \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func receivedCaptionsList(_ list: [PeerTubeCaption]) {
+        captions = list
+        guard !list.isEmpty else {
+            transportBar?.setShowsCaptionsButton(false)
+            return
+        }
+        transportBar?.setShowsCaptionsButton(true)
+        if let pref = PlayerSettings.preferredCaptionLanguage,
+           list.contains(where: { $0.languageId == pref }) {
+            Task { await applyCaption(languageId: pref) }
+        }
+    }
+
+    private func presentCaptionsMenu() {
+        guard let vc = containerController ?? controller else { return }
+        let alert = UIAlertController(title: "Captions", message: nil, preferredStyle: .actionSheet)
+        let offSelected = selectedCaptionLanguage == nil
+        let offAction = UIAlertAction(title: Self.menuTitle("Off", selected: offSelected), style: .default) { [weak self] _ in
+            Task { await self?.applyCaption(languageId: nil) }
+        }
+        alert.addAction(offAction)
+        if offSelected { alert.preferredAction = offAction }
+        for cap in captions {
+            let isCurrent = cap.languageId == selectedCaptionLanguage
+            let line = cap.displayLabel + (cap.automaticallyGenerated ? " (auto)" : "")
+            let action = UIAlertAction(title: Self.menuTitle(line, selected: isCurrent), style: .default) { [weak self] _ in
+                Task { await self?.applyCaption(languageId: cap.languageId) }
+            }
+            alert.addAction(action)
+            if isCurrent { alert.preferredAction = action }
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        vc.present(alert, animated: true)
+    }
+
+    private func captionURLRequest(for url: URL) -> URLRequest {
+        var req = URLRequest(url: url)
+        if let token = accessToken, !token.isEmpty,
+           let ih = instanceBaseURL?.host?.lowercased(),
+           let ph = url.host?.lowercased(),
+           ih == ph {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        return req
+    }
+
+    private func applyCaption(languageId: String?) async {
+        if languageId == nil {
+            await MainActor.run {
+                selectedCaptionLanguage = nil
+                PlayerSettings.preferredCaptionLanguage = nil
+                captionOverlayHost()?.clearCuesAndDisplay()
+            }
+            return
+        }
+        let cap = await MainActor.run { captions.first(where: { $0.languageId == languageId }) }
+        guard let cap else { return }
+        let sourceURL = cap.sourceURL
+        let request = await MainActor.run { captionURLRequest(for: sourceURL) }
+        do {
+            let data: Data
+            if sourceURL.isFileURL {
+                // Offline sidecars: `URLSession` does not yield an HTTPURLResponse for `file://`,
+                // so the status guard below would always fail and captions would never apply.
+                data = try Data(contentsOf: sourceURL)
+            } else {
+                let (remoteData, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { return }
+                data = remoteData
+            }
+            guard let str = String(data: data, encoding: .utf8) else { return }
+            let cues = WebVTTParser.parse(str)
+            await MainActor.run {
+                captionOverlayHost()?.setCues(cues)
+                selectedCaptionLanguage = languageId
+                PlayerSettings.preferredCaptionLanguage = languageId
+            }
+        } catch {
+            PlaybackLog.log.notice("caption download failed videoId=\(self.videoId, privacy: .public) \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// Fetches the PeerTube per-video sprite-sheet storyboard and installs a provider on the
@@ -526,6 +668,60 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     /// bar consumed the press (e.g. cancelled a staged visual scrub), so dismissal is skipped.
     func handleMenuPressIfNeeded() -> Bool {
         transportBar?.handleMenuPressIfNeeded() ?? false
+    }
+
+    /// Called by the container VC when the Siri Remote Play/Pause button goes down.
+    /// Fires once per press (no tap-vs-hold distinction) because the `.playPause` button has
+    /// parallel AVKit / MPRemoteCommand paths we can't reliably suppress. Hold-for-speed
+    /// lives on the touchpad click (`.select`) instead — see `toggleSpeedHold`.
+    func handlePlayPausePress() {
+        transportBar?.handlePlayPausePress()
+    }
+
+    /// Wired as `onSpeedHold` on the transport bar: toggles the playback rate between
+    /// 2x and 1x when the user long-presses the touchpad click (`.select`). We deliberately
+    /// bypass the "only if already playing" guard in `setSpeed` because the user held the
+    /// button specifically to trigger this — they expect an immediate, observable change even
+    /// if the video is paused. We also update `currentSpeed` so the new rate is reapplied
+    /// after a resolution swap or playlist transition (which build fresh `AVPlayer`s).
+    ///
+    /// The decision is based on `player.rate` rather than the stored `currentSpeed` because
+    /// `AVPlayer.play()` always snaps rate back to 1.0, so `currentSpeed` can go stale after
+    /// a tap-pause-then-tap-play cycle. Using the live rate ensures "hold" always gets to 2x
+    /// first from any actual playback rate other than 2x (including paused → resume at 2x).
+    private func toggleSpeedHold() {
+        let fast: Float = 2.0
+        let currentRate = player?.rate ?? 1.0
+        let newSpeed: Float = abs(currentRate - fast) < 0.001 ? 1.0 : fast
+        currentSpeed = newSpeed
+        player?.rate = newSpeed
+        transportBar?.showSpeedNotification("\(Int(newSpeed))x")
+    }
+
+    /// Fired when a finger rests on the Siri Remote touchpad past
+    /// `TransportBarMetrics.touchHoldMinimumDuration`. Temporarily forces playback to 2x while
+    /// recording the pre-boost rate. We deliberately skip the boost while paused so that the
+    /// "hold finger, then swipe to scrub" flow still works (pan gesture takes over once the user
+    /// starts moving). `currentSpeed` is *not* touched — this is a transient override and the
+    /// user's chosen speed should persist across the boost.
+    private func startTouchHoldBoost() {
+        guard let player else { return }
+        guard player.timeControlStatus != .paused else { return }
+        guard rateBeforeTouchHoldBoost == nil else { return }
+
+        rateBeforeTouchHoldBoost = player.rate
+        player.rate = 2.0
+    }
+
+    /// Fired on finger-lift or gesture cancellation after `startTouchHoldBoost`. Restores the
+    /// previously captured rate unless the player was paused while the boost was active (e.g.
+    /// the user tapped Play/Pause during the hold), in which case we respect the pause and
+    /// leave the rate at 0.
+    private func endTouchHoldBoost() {
+        guard let saved = rateBeforeTouchHoldBoost else { return }
+        rateBeforeTouchHoldBoost = nil
+        guard let player, player.rate > 0 else { return }
+        player.rate = saved
     }
 
     deinit {
@@ -670,6 +866,10 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             videoId = nextVideoId
             playlistQueue = nextQueue
             refreshSkipNextButtonVisibility()
+            captions = []
+            selectedCaptionLanguage = nil
+            transportBar?.setShowsCaptionsButton(false)
+            captionOverlayHost()?.clearCuesAndDisplay()
             resolutions = video.resolutionOptions
             autoURL = url
             // Apply the default-resolution setting to the next item too.
@@ -695,6 +895,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             // Drop stale storyboard; `fetchStoryboards` below re-installs one for the new item.
             transportBar?.storyboardProvider = nil
             fetchStoryboards(for: nextVideoId)
+            fetchCaptions(for: nextVideoId)
 
             let asset = AVPlayerViewControllerRepresentable.makeAsset(
                 url: startURL,
@@ -802,6 +1003,10 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         reportCurrentTime()
         player?.pause()
         statusObservation = nil
+        captions = []
+        selectedCaptionLanguage = nil
+        captionOverlayHost()?.clearCuesAndDisplay()
+        transportBar?.setShowsCaptionsButton(false)
         transportBar?.tearDown()
         transportBar = nil
         removeLoadingOverlay()
@@ -915,6 +1120,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     ) {
         initialLoadObservation?.invalidate()
         initialLoadObservation = nil
+        captionOverlayHost()?.clearCuesAndDisplay()
 
         let tolerance = CMTime(seconds: 5, preferredTimescale: 600)
 
@@ -978,6 +1184,10 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                     newPlayer?.rate = targetSpeed
                     self.isSwitching = false
                     self.removeLoadingOverlay()
+                    if let lang = self.selectedCaptionLanguage,
+                       self.captions.contains(where: { $0.languageId == lang }) {
+                        Task { await self.applyCaption(languageId: lang) }
+                    }
                 } else if item.status == .failed {
                     let err = item.error
                     PlaybackLog.log.error("resolution switch failed videoId=\(self.videoId, privacy: .public) \(err?.localizedDescription ?? "nil", privacy: .public)")

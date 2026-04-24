@@ -14,6 +14,7 @@ enum Endpoint {
     case videoDetail(id: String)
     case videoFileToken(id: String)
     case videoStoryboards(id: String)
+    case videoCaptions(id: String)
     case videoCommentThreads(videoId: String, start: Int, count: Int, sort: String)
     case videoCommentThreadDetail(videoId: String, threadId: Int)
     case postVideoComment(videoId: String, text: String)
@@ -79,6 +80,8 @@ enum Endpoint {
             return "/api/v1/videos/\(id)/token"
         case .videoStoryboards(let id):
             return "/api/v1/videos/\(id)/storyboards"
+        case .videoCaptions(let id):
+            return "/api/v1/videos/\(id)/captions"
         case .videoCommentThreads(let id, _, _, _), .postVideoComment(let id, _):
             return "/api/v1/videos/\(id)/comment-threads"
         case .videoCommentThreadDetail(let id, let threadId):

@@ -10,7 +10,33 @@ struct DownloadedVideo: Codable, Identifiable {
     let fileSize: Int64
     let localFilename: String
     let downloadedAt: Date
+    /// Language id → local `.vtt` filename in the downloads directory (optional for legacy metadata).
+    let captionFilenames: [String: String]?
     var id: String { videoId }
+
+    init(
+        videoId: String,
+        name: String,
+        thumbnailPath: String?,
+        channelName: String?,
+        duration: Int?,
+        qualityLabel: String,
+        fileSize: Int64,
+        localFilename: String,
+        downloadedAt: Date,
+        captionFilenames: [String: String]? = nil
+    ) {
+        self.videoId = videoId
+        self.name = name
+        self.thumbnailPath = thumbnailPath
+        self.channelName = channelName
+        self.duration = duration
+        self.qualityLabel = qualityLabel
+        self.fileSize = fileSize
+        self.localFilename = localFilename
+        self.downloadedAt = downloadedAt
+        self.captionFilenames = captionFilenames
+    }
 }
 
 struct DownloadProgress {

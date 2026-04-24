@@ -332,21 +332,91 @@ final class DownloadManager: NSObject, ObservableObject {
     }
 
     func removeDownload(videoId: String) {
+        let dir = downloadsDirectoryURL()
         if let entry = downloadedVideos.first(where: { $0.videoId == videoId }) {
-            let fileURL = downloadsDirectoryURL().appendingPathComponent(entry.localFilename)
+            let fileURL = dir.appendingPathComponent(entry.localFilename)
             try? FileManager.default.removeItem(at: fileURL)
+            if let caps = entry.captionFilenames {
+                for (_, fname) in caps {
+                    try? FileManager.default.removeItem(at: dir.appendingPathComponent(fname))
+                }
+            }
         }
         downloadedVideos.removeAll { $0.videoId == videoId }
         saveMetadata()
     }
 
     func removeAllDownloads() {
+        let dir = downloadsDirectoryURL()
         for entry in downloadedVideos {
-            let fileURL = downloadsDirectoryURL().appendingPathComponent(entry.localFilename)
+            let fileURL = dir.appendingPathComponent(entry.localFilename)
             try? FileManager.default.removeItem(at: fileURL)
+            if let caps = entry.captionFilenames {
+                for (_, fname) in caps {
+                    try? FileManager.default.removeItem(at: dir.appendingPathComponent(fname))
+                }
+            }
         }
         downloadedVideos.removeAll()
         saveMetadata()
+    }
+
+    /// Offline caption tracks saved next to the downloaded video file.
+    func localPeerTubeCaptions(for videoId: String) -> [PeerTubeCaption] {
+        guard let entry = downloadedVideos.first(where: { $0.videoId == videoId }),
+              let map = entry.captionFilenames, !map.isEmpty else { return [] }
+        let dir = downloadsDirectoryURL()
+        var out: [PeerTubeCaption] = []
+        for (langId, fname) in map {
+            let url = dir.appendingPathComponent(fname)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            let label = Self.displayLanguageName(for: langId)
+            out.append(PeerTubeCaption(
+                languageId: langId,
+                displayLabel: label,
+                automaticallyGenerated: false,
+                sourceURL: url
+            ))
+        }
+        return out.sorted { $0.displayLabel.localizedCaseInsensitiveCompare($1.displayLabel) == .orderedAscending }
+    }
+
+    private static func displayLanguageName(for code: String) -> String {
+        if let s = Locale.current.localizedString(forLanguageCode: code) { return s }
+        let primary = code.split(separator: "-").first.map(String.init) ?? code
+        return Locale.current.localizedString(forLanguageCode: primary) ?? code
+    }
+
+    /// Fetches `/videos/{id}/captions` and saves each `.vtt` into the active downloads directory.
+    func downloadCaptionSidecars(videoId: String, apiClient: PeerTubeAPIClient, accessToken: String?) async -> [String: String] {
+        var result: [String: String] = [:]
+        do {
+            let data = try await apiClient.rawRequest(.videoCaptions(id: videoId))
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let resp = try decoder.decode(VideoCaptionsResponse.self, from: data)
+            let list = (resp.data ?? []).peerTubeCaptions(instanceBase: apiClient.baseURL)
+            let dir = downloadsDirectoryURL()
+            for cap in list {
+                var req = URLRequest(url: cap.sourceURL)
+                if let token = accessToken, !token.isEmpty,
+                   let ih = apiClient.baseURL?.host?.lowercased(),
+                   let ph = cap.sourceURL.host?.lowercased(),
+                   ih == ph {
+                    req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                }
+                let (vttData, response) = try await URLSession.shared.data(for: req)
+                guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { continue }
+                guard !vttData.isEmpty else { continue }
+                let fname = "\(videoId)-\(cap.languageId).vtt"
+                let dest = dir.appendingPathComponent(fname)
+                try vttData.write(to: dest)
+                result[cap.languageId] = fname
+            }
+        } catch {
+            downloadLog.notice("caption sidecars skipped videoId=\(videoId, privacy: .public) \(error.localizedDescription, privacy: .public)")
+        }
+        return result
     }
 
     func localFileURL(for videoId: String) -> URL? {
@@ -582,22 +652,35 @@ final class DownloadManager: NSObject, ObservableObject {
                         self.notifyDownloadFinished(videoId: videoId)
                         break
                     }
-                    let entry = DownloadedVideo(
-                        videoId: meta.videoId,
-                        name: meta.name,
-                        thumbnailPath: meta.thumbnailPath,
-                        channelName: meta.channelName,
-                        duration: meta.duration,
-                        qualityLabel: meta.qualityLabel,
-                        fileSize: fileSize,
-                        localFilename: filename,
-                        downloadedAt: Date()
-                    )
-                    self.activeDownloads.removeValue(forKey: videoId)
-                    self.downloadedVideos.removeAll { $0.videoId == videoId }
-                    self.downloadedVideos.append(entry)
-                    self.saveMetadata()
-                    self.notifyDownloadFinished(videoId: videoId)
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        var capMap: [String: String]? = nil
+                        if let client = meta.apiClient {
+                            let m = await self.downloadCaptionSidecars(
+                                videoId: meta.videoId,
+                                apiClient: client,
+                                accessToken: meta.accessToken
+                            )
+                            capMap = m.isEmpty ? nil : m
+                        }
+                        let entry = DownloadedVideo(
+                            videoId: meta.videoId,
+                            name: meta.name,
+                            thumbnailPath: meta.thumbnailPath,
+                            channelName: meta.channelName,
+                            duration: meta.duration,
+                            qualityLabel: meta.qualityLabel,
+                            fileSize: fileSize,
+                            localFilename: filename,
+                            downloadedAt: Date(),
+                            captionFilenames: capMap
+                        )
+                        self.activeDownloads.removeValue(forKey: videoId)
+                        self.downloadedVideos.removeAll { $0.videoId == videoId }
+                        self.downloadedVideos.append(entry)
+                        self.saveMetadata()
+                        self.notifyDownloadFinished(videoId: videoId)
+                    }
 
                 case .cancelled:
                     self.activeDownloads.removeValue(forKey: videoId)
@@ -866,22 +949,35 @@ final class DownloadManager: NSObject, ObservableObject {
             return
         }
 
-        let entry = DownloadedVideo(
-            videoId: meta.videoId,
-            name: meta.name,
-            thumbnailPath: meta.thumbnailPath,
-            channelName: meta.channelName,
-            duration: meta.duration,
-            qualityLabel: meta.qualityLabel,
-            fileSize: fileSize,
-            localFilename: filename,
-            downloadedAt: Date()
-        )
-        self.activeDownloads.removeValue(forKey: videoId)
-        self.downloadedVideos.removeAll { $0.videoId == videoId }
-        self.downloadedVideos.append(entry)
-        self.saveMetadata()
-        self.notifyDownloadFinished(videoId: videoId)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var capMap: [String: String]? = nil
+            if let client = meta.apiClient {
+                let m = await self.downloadCaptionSidecars(
+                    videoId: meta.videoId,
+                    apiClient: client,
+                    accessToken: meta.accessToken
+                )
+                capMap = m.isEmpty ? nil : m
+            }
+            let entry = DownloadedVideo(
+                videoId: meta.videoId,
+                name: meta.name,
+                thumbnailPath: meta.thumbnailPath,
+                channelName: meta.channelName,
+                duration: meta.duration,
+                qualityLabel: meta.qualityLabel,
+                fileSize: fileSize,
+                localFilename: filename,
+                downloadedAt: Date(),
+                captionFilenames: capMap
+            )
+            self.activeDownloads.removeValue(forKey: videoId)
+            self.downloadedVideos.removeAll { $0.videoId == videoId }
+            self.downloadedVideos.append(entry)
+            self.saveMetadata()
+            self.notifyDownloadFinished(videoId: videoId)
+        }
     }
 
     private func loadMetadata() {
@@ -1032,26 +1128,39 @@ extension DownloadManager: URLSessionDownloadDelegate {
                 return
             }
 
-            let entry = DownloadedVideo(
-                videoId: meta.videoId,
-                name: meta.name,
-                thumbnailPath: meta.thumbnailPath,
-                channelName: meta.channelName,
-                duration: meta.duration,
-                qualityLabel: meta.qualityLabel,
-                fileSize: fileSize,
-                localFilename: filename,
-                downloadedAt: Date()
-            )
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                var capMap: [String: String]? = nil
+                if let client = meta.apiClient {
+                    let m = await self.downloadCaptionSidecars(
+                        videoId: meta.videoId,
+                        apiClient: client,
+                        accessToken: meta.accessToken
+                    )
+                    capMap = m.isEmpty ? nil : m
+                }
+                let entry = DownloadedVideo(
+                    videoId: meta.videoId,
+                    name: meta.name,
+                    thumbnailPath: meta.thumbnailPath,
+                    channelName: meta.channelName,
+                    duration: meta.duration,
+                    qualityLabel: meta.qualityLabel,
+                    fileSize: fileSize,
+                    localFilename: filename,
+                    downloadedAt: Date(),
+                    captionFilenames: capMap
+                )
 
-            self.activeDownloads.removeValue(forKey: meta.videoId)
-            self.taskVideoIdMap.removeValue(forKey: taskId)
-            self.taskMetaMap.removeValue(forKey: taskId)
-            self.speedTrackers.removeValue(forKey: taskId)
-            self.downloadedVideos.removeAll { $0.videoId == meta.videoId }
-            self.downloadedVideos.append(entry)
-            self.saveMetadata()
-            self.notifyDownloadFinished(videoId: meta.videoId)
+                self.activeDownloads.removeValue(forKey: meta.videoId)
+                self.taskVideoIdMap.removeValue(forKey: taskId)
+                self.taskMetaMap.removeValue(forKey: taskId)
+                self.speedTrackers.removeValue(forKey: taskId)
+                self.downloadedVideos.removeAll { $0.videoId == meta.videoId }
+                self.downloadedVideos.append(entry)
+                self.saveMetadata()
+                self.notifyDownloadFinished(videoId: meta.videoId)
+            }
         }
     }
 

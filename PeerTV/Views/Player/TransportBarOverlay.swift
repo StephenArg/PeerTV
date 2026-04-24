@@ -25,6 +25,14 @@ private enum TransportBarMetrics {
     static let skipSeconds: Double = 10
     /// Press duration that separates a "tap" (skip) from a "hold" (enter skim mode).
     static let holdBeforeSkim: TimeInterval = 0.5
+    /// Press duration that qualifies a touchpad click (`.select`) as a "hold" (toggles
+    /// between 2x and 1x playback rate) vs. a short tap (regular action — toggle play/pause,
+    /// exit skim, or commit a visual scrub).
+    static let holdBeforeSpeedToggle: TimeInterval = 1.0
+    /// How long a finger must rest on the Siri Remote touchpad (without enough movement to
+    /// become a scrub pan or tap) before the temporary 2x boost kicks in. Lifting the finger
+    /// ends the boost and restores the previous rate.
+    static let touchHoldMinimumDuration: TimeInterval = 0.5
     /// Skim ticks per second — a step-seek is performed every `skimTickInterval` seconds.
     static let skimTickInterval: TimeInterval = 0.25
     /// Per-tick jump (seconds) for skim stages 1…4. Effective speed = value / skimTickInterval.
@@ -66,10 +74,24 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
     /// `direction` is -1 for left / +1 for right.
     var onArrowPressBegan: ((Int) -> Void)?
     var onArrowPressEnded: ((Int) -> Void)?
-    var onSelect: (() -> Void)?
+    /// Physical touchpad click (`.select`) begins. Split into began/ended (with matching
+    /// `onSelectPressEnded` / `onSelectPressCancelled`) so the overlay can distinguish a
+    /// short tap (toggle play/pause, exit skim, commit scrub) from a hold (toggle 2x / 1x
+    /// playback rate). Unlike the `.playPause` hardware button, `.select` has no parallel
+    /// AVKit / `MPRemoteCommandCenter` path, so tap-vs-hold detection on this press is
+    /// reliable.
+    var onSelectPressBegan: (() -> Void)?
+    var onSelectPressEnded: (() -> Void)?
+    var onSelectPressCancelled: (() -> Void)?
     var onPanChanged: ((CGFloat) -> Void)?
     var onPanEnded: ((CGFloat) -> Void)?
     var onActivity: (() -> Void)?
+    /// Fired when a light, stationary touch on the Siri Remote touchpad (indirect `UITouch`,
+    /// **not** a physical `.select` click) has been held for at least
+    /// `touchHoldMinimumDuration`. Used to temporarily boost playback to 2x while the finger
+    /// stays on the pad. `onTouchHoldEnded` fires on release or cancellation.
+    var onTouchHoldBegan: (() -> Void)?
+    var onTouchHoldEnded: (() -> Void)?
     // Menu / Back is intentionally *not* handled on the scrubber — the container VC is the
     // single authority for cancelling visual scrub vs. dismissing the player. Handling it here
     // too caused a race: two parallel menu paths would both fire, and whichever saw
@@ -165,6 +187,12 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
         wakeTap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
         wakeTap.cancelsTouchesInView = false
         addGestureRecognizer(wakeTap)
+
+        // Touch-hold detection uses `touchesBegan` / `touchesEnded` directly (see overrides
+        // below). `UILongPressGestureRecognizer` was tried first but is press-driven on tvOS
+        // by default (`allowedPressTypes` = `[.select]`), so light touchpad touches alone
+        // don't reliably start it. The direct `UITouch` path is the documented route for
+        // Siri Remote indirect touches and is what powers `wakeTap` above as well.
     }
 
     /// Only recognize the pan gesture when the motion is primarily horizontal; that way vertical
@@ -173,6 +201,81 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
         let v = pan.velocity(in: self)
         return abs(v.x) > abs(v.y)
+    }
+
+    // MARK: - Touch-hold (temporary 2x boost)
+
+    /// Fires after a finger has rested on the touchpad for `touchHoldMinimumDuration`. Set in
+    /// `touchesBegan` and cleared in `touchesEnded` / `touchesCancelled`.
+    private var touchHoldWorkItem: DispatchWorkItem?
+    /// `true` once `touchHoldWorkItem` has actually fired and `onTouchHoldBegan` has been
+    /// called. Gates the matching `onTouchHoldEnded` on finger-lift so we don't fire a phantom
+    /// "end" for short taps that never hit the threshold.
+    private var touchHoldDidFire: Bool = false
+    /// `true` while the user is actively pressing the touchpad click (`.select`). The click
+    /// rests on the same finger that's also producing indirect `UITouch`es, so without this
+    /// gate the 0.5s touch-hold boost would fire halfway into a 1.0s click-and-hold (which
+    /// is the speed-toggle gesture), causing the player to briefly run at 2x and then revert
+    /// the moment the click is released — even if the user only intended to toggle speed.
+    /// While set, we suppress new touch-hold timers and tear down any active boost.
+    private var isSelectPressed: Bool = false
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        guard touches.contains(where: { $0.type == .indirect }) else { return }
+        // While the touchpad click is held the user is doing a click-hold gesture, not a
+        // light-touch gesture; don't arm the boost.
+        guard !isSelectPressed else { return }
+        scheduleTouchHold()
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        guard touches.contains(where: { $0.type == .indirect }) else { return }
+        finishTouchHold()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        guard touches.contains(where: { $0.type == .indirect }) else { return }
+        finishTouchHold()
+    }
+
+    private func scheduleTouchHold() {
+        touchHoldWorkItem?.cancel()
+        touchHoldDidFire = false
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.touchHoldDidFire = true
+            self.onTouchHoldBegan?()
+        }
+        touchHoldWorkItem = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + TransportBarMetrics.touchHoldMinimumDuration,
+            execute: work
+        )
+    }
+
+    private func finishTouchHold() {
+        touchHoldWorkItem?.cancel()
+        touchHoldWorkItem = nil
+        if touchHoldDidFire {
+            touchHoldDidFire = false
+            onTouchHoldEnded?()
+        }
+    }
+
+    /// Called from `pressesBegan` when a `.select` click goes down. Tears down any active or
+    /// pending touch-hold so the click-and-hold gesture (speed toggle) can run unobstructed.
+    /// If a boost was already active, `onTouchHoldEnded` fires here so the player rate
+    /// reverts cleanly *before* the speed toggle eventually applies.
+    private func suppressTouchHoldForSelectPress() {
+        isSelectPressed = true
+        finishTouchHold()
+    }
+
+    private func releaseTouchHoldSuppression() {
+        isSelectPressed = false
     }
 
     override func layoutSubviews() {
@@ -211,7 +314,8 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
                 onArrowPressBegan?(1)
                 handled = true
             case .select:
-                onSelect?()
+                suppressTouchHoldForSelectPress()
+                onSelectPressBegan?()
                 handled = true
             case .upArrow, .downArrow:
                 // Wake the bar; fall through so the focus engine can navigate vertically.
@@ -235,6 +339,10 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
             case .rightArrow:
                 onArrowPressEnded?(1)
                 handled = true
+            case .select:
+                releaseTouchHoldSuppression()
+                onSelectPressEnded?()
+                handled = true
             default:
                 break
             }
@@ -250,6 +358,9 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
             switch press.type {
             case .leftArrow: onArrowPressEnded?(-1)
             case .rightArrow: onArrowPressEnded?(1)
+            case .select:
+                releaseTouchHoldSuppression()
+                onSelectPressCancelled?()
             default: break
             }
         }
@@ -303,6 +414,7 @@ final class TransportBarOverlayView: UIView {
     let qualityButton: UIButton
     let skipNextButton: UIButton
     let speedButton: UIButton
+    let captionsButton: UIButton
     let currentTimeLabel = UILabel()
     let remainingTimeLabel = UILabel()
     /// Small icon next to the elapsed-time label showing play/pause state or skim direction + stage.
@@ -320,6 +432,11 @@ final class TransportBarOverlayView: UIView {
 
     var showsQualityButton: Bool = true {
         didSet { qualityButton.isHidden = !showsQualityButton }
+    }
+
+    /// Shown when the video has at least one caption track (PeerTube).
+    var showsCaptionsButton: Bool = false {
+        didSet { captionsButton.isHidden = !showsCaptionsButton }
     }
 
     /// Fades the visible chrome (scrim / title / buttons / time labels / track fill) but keeps the
@@ -353,6 +470,7 @@ final class TransportBarOverlayView: UIView {
         self.qualityButton = Self.makeIconButton(symbol: "sparkles.tv")
         self.skipNextButton = Self.makeIconButton(symbol: "forward.end.fill")
         self.speedButton = Self.makeIconButton(symbol: "gauge.with.dots.needle.67percent")
+        self.captionsButton = Self.makeIconButton(symbol: "captions.bubble")
         super.init(frame: frame)
         setup()
     }
@@ -398,8 +516,11 @@ final class TransportBarOverlayView: UIView {
         buttonStack.addArrangedSubview(qualityButton)
         buttonStack.addArrangedSubview(skipNextButton)
         buttonStack.addArrangedSubview(speedButton)
+        buttonStack.addArrangedSubview(captionsButton)
         skipNextButton.isHidden = true
         skipNextButton.accessibilityLabel = "Play next in playlist"
+        captionsButton.isHidden = true
+        captionsButton.accessibilityLabel = "Captions"
         buttonStack.axis = .horizontal
         buttonStack.spacing = TransportBarMetrics.buttonRowSpacing
         buttonStack.translatesAutoresizingMaskIntoConstraints = false
@@ -637,6 +758,47 @@ private extension UIFont {
     }
 }
 
+// MARK: - Speed-change notification
+
+/// Small top-right pill shown briefly when the Play/Pause hold gesture toggles the playback
+/// rate between 1x and 2x. Lives on the root view (not inside `TransportBarOverlayView`) so
+/// it's not affected by the bar's auto-hide chrome fade — the user gets explicit feedback
+/// even when the transport bar itself is hidden.
+final class SpeedNotificationView: UIView {
+    private let label = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setup()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not implemented") }
+
+    private func setup() {
+        backgroundColor = UIColor.black.withAlphaComponent(0.75)
+        layer.cornerRadius = 12
+        clipsToBounds = true
+        isUserInteractionEnabled = false
+
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.textColor = .white
+        label.font = .systemFont(ofSize: 28, weight: .semibold).rounded()
+        label.textAlignment = .center
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -22)
+        ])
+    }
+
+    func setText(_ text: String) {
+        label.text = text
+    }
+}
+
 // MARK: - Root host
 
 /// Hosts the bar. The scrubber is always focusable (its UIControl alpha stays at 1); only the
@@ -646,6 +808,18 @@ final class TransportBarRootView: UIView {
     let barView: TransportBarOverlayView
 
     private(set) var isBarVisible: Bool = true
+
+    /// Fired whenever `setBarVisible` runs so the caption overlay can match transport chrome.
+    var onBarVisibilityChanged: ((Bool) -> Void)?
+
+    /// Top-right speed-change indicator. Shown for `speedNotificationVisibleDuration` when the
+    /// Play/Pause hold gesture flips between 2x and 1x.
+    private let speedNotificationView = SpeedNotificationView()
+    private var speedNotificationHideWorkItem: DispatchWorkItem?
+    private static let speedNotificationFadeIn: TimeInterval = 0.2
+    private static let speedNotificationFadeOut: TimeInterval = 0.3
+    /// Total on-screen time for a speed-change pill, from start of fade-in to end of fade-out.
+    private static let speedNotificationVisibleDuration: TimeInterval = 2.5
 
     override init(frame: CGRect) {
         barView = TransportBarOverlayView()
@@ -661,6 +835,14 @@ final class TransportBarRootView: UIView {
             barView.trailingAnchor.constraint(equalTo: trailingAnchor)
         ])
 
+        speedNotificationView.translatesAutoresizingMaskIntoConstraints = false
+        speedNotificationView.alpha = 0
+        addSubview(speedNotificationView)
+        NSLayoutConstraint.activate([
+            speedNotificationView.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 60),
+            speedNotificationView.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -80)
+        ])
+
         setBarVisible(true, animated: false)
     }
 
@@ -668,6 +850,7 @@ final class TransportBarRootView: UIView {
 
     func setBarVisible(_ visible: Bool, animated: Bool, completion: (() -> Void)? = nil) {
         isBarVisible = visible
+        onBarVisibilityChanged?(visible)
         let target: CGFloat = visible ? 1 : 0
         if animated {
             UIView.animate(withDuration: 0.25, animations: { [weak self] in
@@ -677,6 +860,36 @@ final class TransportBarRootView: UIView {
             barView.setChromeAlpha(target)
             completion?()
         }
+    }
+
+    /// Shows the speed-change pill with `text` (e.g. "2x", "1x"). Re-invoking during the
+    /// visible window restarts the timer so rapid toggles extend rather than cut short.
+    func showSpeedNotification(_ text: String) {
+        speedNotificationView.setText(text)
+        speedNotificationHideWorkItem?.cancel()
+
+        UIView.animate(withDuration: Self.speedNotificationFadeIn) { [weak self] in
+            self?.speedNotificationView.alpha = 1
+        }
+
+        let work = DispatchWorkItem { [weak self] in
+            UIView.animate(withDuration: Self.speedNotificationFadeOut) {
+                self?.speedNotificationView.alpha = 0
+            }
+        }
+        speedNotificationHideWorkItem = work
+        // Schedule the fade-out so its *completion* lands at `visibleDuration` — that gives
+        // the user the full two-second window they asked for (fade-in → hold → fade-out = 2s).
+        let stay = Self.speedNotificationVisibleDuration - Self.speedNotificationFadeOut
+        DispatchQueue.main.asyncAfter(deadline: .now() + stay, execute: work)
+    }
+
+    /// Hides the pill immediately (no animation). Called during teardown so a stale pending
+    /// fade doesn't touch a detached view.
+    func cancelSpeedNotification() {
+        speedNotificationHideWorkItem?.cancel()
+        speedNotificationHideWorkItem = nil
+        speedNotificationView.alpha = 0
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
@@ -728,7 +941,7 @@ final class TransportBarController: NSObject {
 
     // Visual scrub (pan while paused) — the cursor moves but the player doesn't seek until the
     // user presses Play/Pause. `pendingScrubCommit` is true once the pan ends while paused and
-    // stays true until `handleSelectPressed` commits the seek.
+    // stays true until `selectTapAction` commits the seek.
     private var pendingScrubCommit: Bool = false
 
     // Thumbnail preview generator / cache
@@ -741,11 +954,35 @@ final class TransportBarController: NSObject {
     /// currently-buffered range.
     var storyboardProvider: StoryboardThumbnailProvider?
 
+    /// Fired on the main queue from the periodic time observer with the timeline time used for UI
+    /// (scrub/skim preview when active, otherwise the player's current time).
+    var onTimeUpdate: ((TimeInterval) -> Void)?
+
     private let onQualityTapped: () -> Void
     private let onSpeedTapped: () -> Void
+    private let onCaptionsTapped: (() -> Void)?
     private let onSkipNextTapped: (() -> Void)?
+    /// Invoked when the touchpad click (`.select`) is held past `holdBeforeSpeedToggle`.
+    /// The coordinator owns `currentSpeed` (so it can reapply on resolution swaps), so the
+    /// actual 2x / 1x toggle lives there — this controller just detects the gesture and
+    /// calls back. Previously wired to `.playPause`, but that path had parallel AVKit /
+    /// MPRemoteCommand handlers toggling play state at button-down which defeated the
+    /// tap-vs-hold timing. `.select` has no such parallel path.
+    private let onSpeedHold: (() -> Void)?
+    /// Invoked when a stationary touch on the Siri Remote touchpad passes
+    /// `touchHoldMinimumDuration`. Paired with `onTouchHoldEnded` (fired on finger-lift or
+    /// gesture cancellation). Gives the coordinator a chance to apply a temporary 2x boost.
+    private let onTouchHoldBegan: (() -> Void)?
+    private let onTouchHoldEnded: (() -> Void)?
     private let showsQualityButton: Bool
     private var title: String
+
+    // Touchpad-click hold detection (tap vs. long-press). The timer fires at
+    // `holdBeforeSpeedToggle`; if it fires while the user is still holding, the speed-hold
+    // callback runs and we remember it so the subsequent release doesn't also trigger the
+    // tap action (play/pause toggle / skim exit / scrub commit).
+    private var selectHoldWorkItem: DispatchWorkItem?
+    private var selectHoldDidFire: Bool = false
 
     init(
         showsQualityButton: Bool,
@@ -753,13 +990,21 @@ final class TransportBarController: NSObject {
         title: String,
         onQualityTapped: @escaping () -> Void,
         onSpeedTapped: @escaping () -> Void,
-        onSkipNextTapped: (() -> Void)? = nil
+        onCaptionsTapped: (() -> Void)? = nil,
+        onSkipNextTapped: (() -> Void)? = nil,
+        onSpeedHold: (() -> Void)? = nil,
+        onTouchHoldBegan: (() -> Void)? = nil,
+        onTouchHoldEnded: (() -> Void)? = nil
     ) {
         self.showsQualityButton = showsQualityButton
         self.title = title
         self.onQualityTapped = onQualityTapped
         self.onSpeedTapped = onSpeedTapped
+        self.onCaptionsTapped = onCaptionsTapped
         self.onSkipNextTapped = onSkipNextTapped
+        self.onSpeedHold = onSpeedHold
+        self.onTouchHoldBegan = onTouchHoldBegan
+        self.onTouchHoldEnded = onTouchHoldEnded
         super.init()
 
         rootView.barView.showsQualityButton = showsQualityButton
@@ -768,14 +1013,19 @@ final class TransportBarController: NSObject {
 
         rootView.barView.qualityButton.addTarget(self, action: #selector(qualityPressed), for: .primaryActionTriggered)
         rootView.barView.speedButton.addTarget(self, action: #selector(speedPressed), for: .primaryActionTriggered)
+        rootView.barView.captionsButton.addTarget(self, action: #selector(captionsPressed), for: .primaryActionTriggered)
         rootView.barView.skipNextButton.addTarget(self, action: #selector(skipNextPressed), for: .primaryActionTriggered)
 
         rootView.barView.trackControl.onArrowPressBegan = { [weak self] d in self?.handleArrowPressBegan(direction: d) }
         rootView.barView.trackControl.onArrowPressEnded = { [weak self] d in self?.handleArrowPressEnded(direction: d) }
-        rootView.barView.trackControl.onSelect = { [weak self] in self?.handleSelectPressed() }
+        rootView.barView.trackControl.onSelectPressBegan = { [weak self] in self?.handleSelectPressBegan() }
+        rootView.barView.trackControl.onSelectPressEnded = { [weak self] in self?.handleSelectPressEnded() }
+        rootView.barView.trackControl.onSelectPressCancelled = { [weak self] in self?.handleSelectPressCancelled() }
         rootView.barView.trackControl.onActivity = { [weak self] in self?.showBarAndResetTimer() }
         rootView.barView.trackControl.onPanChanged = { [weak self] tx in self?.handleScrubberPan(translationX: tx, ended: false) }
         rootView.barView.trackControl.onPanEnded = { [weak self] tx in self?.handleScrubberPan(translationX: tx, ended: true) }
+        rootView.barView.trackControl.onTouchHoldBegan = { [weak self] in self?.onTouchHoldBegan?() }
+        rootView.barView.trackControl.onTouchHoldEnded = { [weak self] in self?.onTouchHoldEnded?() }
     }
 
     // Public
@@ -787,6 +1037,10 @@ final class TransportBarController: NSObject {
 
     func setShowsSkipNext(_ show: Bool) {
         rootView.barView.showsSkipNextButton = show
+    }
+
+    func setShowsCaptionsButton(_ show: Bool) {
+        rootView.barView.showsCaptionsButton = show
     }
 
     /// Timestamp of the most recent Menu press this controller consumed. Used to debounce
@@ -814,6 +1068,79 @@ final class TransportBarController: NSObject {
         return false
     }
 
+    /// Siri Remote hardware Play/Pause button. Fires immediately on press — no hold
+    /// detection, because `.playPause` has parallel AVKit / `MPRemoteCommandCenter` paths
+    /// that toggle state at button-down which we can't reliably suppress. Hold-for-speed
+    /// lives on the touchpad click (`.select`) instead, which has no such parallel path.
+    func handlePlayPausePress() {
+        playPauseTapAction()
+    }
+
+    /// Touchpad click (`.select`) press-down on the scrubber. Starts the hold-detection
+    /// timer; past `holdBeforeSpeedToggle` the `onSpeedHold` callback fires (coordinator
+    /// toggles between 2x and 1x). A quick release runs the normal tap action via
+    /// `handleSelectPressEnded`.
+    ///
+    /// While skimming or with a staged visual-scrub commit pending, we skip the hold timer
+    /// entirely so those modes only respond to the tap — the user can get out of skim /
+    /// scrub via a quick click and never accidentally toggle speed.
+    func handleSelectPressBegan() {
+        selectHoldWorkItem?.cancel()
+        selectHoldDidFire = false
+
+        if case .skimming = skimPhase { return }
+        if pendingScrubCommit { return }
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.selectHoldDidFire = true
+            self.onSpeedHold?()
+            self.showBarAndResetTimer()
+        }
+        selectHoldWorkItem = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + TransportBarMetrics.holdBeforeSpeedToggle,
+            execute: work
+        )
+    }
+
+    /// Called when the touchpad click is released. Runs the tap action unless the hold
+    /// timer already fired — in which case the release is a no-op because the user got
+    /// their 2x / 1x toggle and we shouldn't also flip play state.
+    func handleSelectPressEnded() {
+        selectHoldWorkItem?.cancel()
+        selectHoldWorkItem = nil
+        if selectHoldDidFire {
+            selectHoldDidFire = false
+            return
+        }
+        selectTapAction()
+    }
+
+    /// Called when the touchpad click is cancelled by the system (e.g. a menu is presented
+    /// on top). Just cancels the hold timer — no tap action, since the user didn't complete
+    /// a deliberate press.
+    func handleSelectPressCancelled() {
+        selectHoldWorkItem?.cancel()
+        selectHoldWorkItem = nil
+        selectHoldDidFire = false
+    }
+
+    /// Shared tap action used by touchpad-click release, the `.playPause` hardware button,
+    /// and the MPRemoteCommand handlers. Mirrors what the touchpad Select click does: exit
+    /// skim, commit a staged visual scrub, or toggle play/pause.
+    private func playPauseTapAction() {
+        if case .skimming = skimPhase {
+            exitSkim()
+            return
+        }
+        if pendingScrubCommit, let target = rootView.barView.trackControl.scrubPreviewTime {
+            commitVisualScrubSeek(to: target)
+            return
+        }
+        togglePlayPause()
+    }
+
     func attach(player: AVPlayer) {
         detach()
         self.player = player
@@ -835,11 +1162,14 @@ final class TransportBarController: NSObject {
         skimTimer?.invalidate(); skimTimer = nil
         skimPhase = .idle
         pendingScrubCommit = false
+        selectHoldWorkItem?.cancel(); selectHoldWorkItem = nil
+        selectHoldDidFire = false
         thumbnailRequestWork?.cancel(); thumbnailRequestWork = nil
         thumbnailGenerator?.cancelAllCGImageGeneration()
         thumbnailGenerator = nil
         thumbnailCache.removeAll()
         storyboardProvider = nil
+        onTimeUpdate = nil
         rootView.barView.thumbnailPreview.isHidden = true
         rootView.barView.thumbnailPreview.clear()
         if let periodicToken, let p = player {
@@ -857,7 +1187,15 @@ final class TransportBarController: NSObject {
         detach()
         hideWorkItem?.cancel()
         hideWorkItem = nil
+        rootView.cancelSpeedNotification()
         rootView.removeFromSuperview()
+    }
+
+    /// Shows a brief top-right pill reading e.g. "2x" or "1x". Called by the coordinator
+    /// after the Play/Pause hold gesture toggles the playback rate — only the hold path
+    /// triggers this; the Speed menu's selections do not.
+    func showSpeedNotification(_ text: String) {
+        rootView.showSpeedNotification(text)
     }
 
     func setLoadingOverlayActive(_ active: Bool) {
@@ -907,11 +1245,13 @@ final class TransportBarController: NSObject {
     private func updateFromPlayer() {
         guard let player else {
             rootView.barView.stateIndicator.isHidden = true
+            onTimeUpdate?(0)
             return
         }
         if player.currentItem?.duration.isIndefinite == true {
             // Live streams — the bar is hidden elsewhere; keep the indicator hidden too.
             rootView.barView.stateIndicator.isHidden = true
+            onTimeUpdate?(0)
             return
         }
 
@@ -937,6 +1277,15 @@ final class TransportBarController: NSObject {
         } else if !hasDuration {
             rootView.barView.stateIndicator.isHidden = true
         }
+
+        let track = rootView.barView.trackControl
+        let captionTime: TimeInterval
+        if track.isScrubbing, let preview = track.scrubPreviewTime {
+            captionTime = preview
+        } else {
+            captionTime = cur
+        }
+        onTimeUpdate?(captionTime)
     }
 
     private func updateBuffered() {
@@ -1043,20 +1392,20 @@ final class TransportBarController: NSObject {
         rootView.barView.qualityButton.isFocused
             || rootView.barView.skipNextButton.isFocused
             || rootView.barView.speedButton.isFocused
+            || rootView.barView.captionsButton.isFocused
     }
 
     // MARK: - Actions (buttons / gestures / arrows)
 
-    private func handleSelectPressed() {
-        // Play/Pause button (touchpad click) exits skim mode if active — per user spec,
-        // skim persists across arrow releases and only stops via Play/Pause.
+    /// Short-tap action for the touchpad click (`.select`). Classic tvOS overlay UX: first
+    /// tap wakes the (hidden) bar without toggling playback; a subsequent tap while the bar
+    /// is visible toggles play/pause. Differs from `playPauseTapAction` (the dedicated
+    /// `.playPause` hardware button) which always toggles immediately.
+    private func selectTapAction() {
         if case .skimming = skimPhase {
             exitSkim()
             return
         }
-        // Visual scrub: pan while paused left the cursor at `scrubPreviewTime` waiting for a
-        // commit. Play/Pause commits the seek (and resumes paused — we don't re-start playback
-        // here; native players usually commit in-place).
         if pendingScrubCommit, let target = rootView.barView.trackControl.scrubPreviewTime {
             commitVisualScrubSeek(to: target)
             return
@@ -1083,6 +1432,10 @@ final class TransportBarController: NSObject {
 
     /// Commits the seek staged by a pan-while-paused (visual scrub). Uses the same `finished`-
     /// aware retry loop as skim exit so we don't "jump back" when the seek is interrupted.
+    ///
+    /// Always resumes playback after the seek lands — committing a scrub is an explicit
+    /// "go to here and play" gesture. (Visual scrub only runs while paused, so without this
+    /// the player would silently stay paused after the user submits the seek.)
     private func commitVisualScrubSeek(to target: TimeInterval) {
         guard player != nil else {
             pendingScrubCommit = false
@@ -1102,12 +1455,14 @@ final class TransportBarController: NSObject {
                 if finished {
                     self.applyFinalSeek(target: target)
                     self.pendingScrubCommit = false
+                    self.player?.play()
                     self.showBarAndResetTimer()
                 } else if attempt < 3 {
                     self.commitVisualScrubRetry(target: target, attempt: attempt + 1)
                 } else {
                     self.pendingScrubCommit = false
                     self.finalizeSeekExitUI()
+                    self.player?.play()
                 }
             }
         }
@@ -1307,6 +1662,11 @@ final class TransportBarController: NSObject {
 
     @objc private func speedPressed() {
         onSpeedTapped()
+        showBarAndResetTimer()
+    }
+
+    @objc private func captionsPressed() {
+        onCaptionsTapped?()
         showBarAndResetTimer()
     }
 
@@ -1518,11 +1878,7 @@ final class TransportBarController: NSObject {
         seekBy(seconds: -TransportBarMetrics.skipSeconds); return .success
     }
     @objc private func mpTogglePlayPause(_ e: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
-        if case .skimming = skimPhase { exitSkim(); return .success }
-        if pendingScrubCommit, let target = rootView.barView.trackControl.scrubPreviewTime {
-            commitVisualScrubSeek(to: target); return .success
-        }
-        togglePlayPause(); return .success
+        playPauseTapAction(); return .success
     }
     @objc private func mpPlay(_ e: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
         if case .skimming = skimPhase { exitSkim(); return .success }
@@ -1552,6 +1908,9 @@ final class PlayerContainerViewController: UIViewController {
     private let playerViewController: AVPlayerViewController
     private let overlayRoot: TransportBarRootView
 
+    /// Sits above the video and below the transport overlay so captions stay readable.
+    let captionOverlay = CaptionOverlayView()
+
     /// Called after the container begins dismissing, once per lifecycle.
     var onDismissed: (() -> Void)?
 
@@ -1563,6 +1922,14 @@ final class PlayerContainerViewController: UIViewController {
     /// one cleared `pendingScrubCommit` first left the others dismissing the player instead of
     /// cancelling the scrub. Collapsing to one path fixes it.
     var shouldConsumeMenuPress: (() -> Bool)?
+
+    /// Invoked when the Siri Remote's physical Play/Pause button goes down. Handled at the
+    /// container level (rather than on the focused scrubber) so the button works even when
+    /// focus has moved up to the Quality / Speed buttons. Fires once per press — no tap
+    /// vs. hold distinction here because the `.playPause` button has parallel AVKit /
+    /// `MPRemoteCommandCenter` paths that we can't reliably suppress. Hold-for-speed lives
+    /// on the touchpad click (`.select`) instead.
+    var onPlayPausePress: (() -> Void)?
 
     init(playerViewController: AVPlayerViewController, overlayRoot: TransportBarRootView) {
         self.playerViewController = playerViewController
@@ -1588,6 +1955,15 @@ final class PlayerContainerViewController: UIViewController {
         ])
         playerViewController.didMove(toParent: self)
 
+        captionOverlay.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(captionOverlay)
+        NSLayoutConstraint.activate([
+            captionOverlay.topAnchor.constraint(equalTo: view.topAnchor),
+            captionOverlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            captionOverlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            captionOverlay.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+
         overlayRoot.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(overlayRoot)
         NSLayoutConstraint.activate([
@@ -1596,6 +1972,11 @@ final class PlayerContainerViewController: UIViewController {
             overlayRoot.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             overlayRoot.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
+
+        overlayRoot.onBarVisibilityChanged = { [weak self] visible in
+            self?.captionOverlay.setTransportBarChromeVisible(visible)
+        }
+        captionOverlay.setTransportBarChromeVisible(overlayRoot.isBarVisible)
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
@@ -1606,10 +1987,23 @@ final class PlayerContainerViewController: UIViewController {
     /// scrub), otherwise dismiss the player. Not calling `super` means UIKit's default
     /// "Menu dismisses the topmost presented VC" behavior is suppressed when we consume.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        for press in presses where press.type == .menu {
-            if shouldConsumeMenuPress?() == true { return }
-            dismiss(animated: true)
-            return
+        for press in presses {
+            switch press.type {
+            case .menu:
+                if shouldConsumeMenuPress?() == true { return }
+                dismiss(animated: true)
+                return
+            case .playPause:
+                // Consume the press so AVKit / MPRemoteCommandCenter don't also react — those
+                // paths only reliably pause (Now Playing state is stale because we hide AVKit's
+                // native controls), which is what caused the "pause works, play doesn't" bug.
+                if let handler = onPlayPausePress {
+                    handler()
+                    return
+                }
+            default:
+                break
+            }
         }
         super.pressesBegan(presses, with: event)
     }
