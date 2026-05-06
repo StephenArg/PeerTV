@@ -6,6 +6,7 @@ struct VideoDetailView: View {
     @State private var showDebugJSON = false
     @State private var showPlaylistPicker = false
     @State private var descriptionExpanded = false
+    @State private var savedPosition: TimeInterval?
 
     init(videoId: String) {
         _vm = StateObject(wrappedValue: VideoDetailViewModel(videoId: videoId))
@@ -29,7 +30,8 @@ struct VideoDetailView: View {
                                 PlayerPresenter.shared.play(
                                     videoId: vm.videoId,
                                     apiClient: session.apiClient,
-                                    accessToken: session.tokenStore.accessToken
+                                    accessToken: session.tokenStore.accessToken,
+                                    accountId: session.activeAccountId
                                 )
                             } label: {
                                 ZStack {
@@ -40,15 +42,50 @@ struct VideoDetailView: View {
                                     .frame(maxWidth: .infinity)
                                     .clipped()
 
-                                    Image(systemName: "play.circle.fill")
-                                        .font(.system(size: 80))
-                                        .foregroundStyle(.white)
-                                        .shadow(radius: 10)
+                                    VStack(spacing: 12) {
+                                        Image(systemName: "play.circle.fill")
+                                            .font(.system(size: 80))
+                                            .foregroundStyle(.white)
+                                            .shadow(radius: 10)
+
+                                        if let pos = savedPosition {
+                                            Text("Resume at \(formatTime(pos))")
+                                                .font(.callout)
+                                                .fontWeight(.medium)
+                                                .padding(.horizontal, 16)
+                                                .padding(.vertical, 8)
+                                                .background(.ultraThinMaterial, in: Capsule())
+                                        }
+                                    }
                                 }
                                 .clipShape(RoundedRectangle(cornerRadius: 16))
                             }
                             .buttonStyle(.card)
-                            .accessibilityLabel("Play video")
+                            .accessibilityLabel(savedPosition != nil ? "Resume video" : "Play video")
+
+                            if savedPosition != nil {
+                                Button {
+                                    if let accountId = session.activeAccountId {
+                                        PlaybackPositionStore.remove(videoId: vm.videoId, accountId: accountId)
+                                        savedPosition = nil
+                                    }
+                                    PlayerPresenter.shared.play(
+                                        videoId: vm.videoId,
+                                        apiClient: session.apiClient,
+                                        accessToken: session.tokenStore.accessToken,
+                                        accountId: session.activeAccountId
+                                    )
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "arrow.counterclockwise")
+                                        Text("Start from beginning")
+                                    }
+                                    .font(.callout)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 14)
+                                }
+                                .buttonStyle(.card)
+                            }
 
                             if session.tokenStore.accessToken != nil {
                                 controlBar(video: video)
@@ -180,11 +217,15 @@ struct VideoDetailView: View {
         }
         .task {
             vm.configure(apiClient: session.apiClient, accountName: session.username.isEmpty ? nil : session.username)
+            refreshSavedPosition()
             await vm.load()
             if session.tokenStore.accessToken != nil {
                 await vm.loadUserRating()
             }
             await vm.loadComments()
+        }
+        .onAppear {
+            refreshSavedPosition()
         }
         .onChange(of: vm.playlistMessage) { message in
             if let message {
@@ -194,6 +235,25 @@ struct VideoDetailView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Helpers
+
+    private func refreshSavedPosition() {
+        if let accountId = session.activeAccountId {
+            savedPosition = PlaybackPositionStore.position(for: vm.videoId, accountId: accountId)
+        } else {
+            savedPosition = nil
+        }
+    }
+
+    private func formatTime(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded(.down))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        if h > 0 { return String(format: "%d:%02d:%02d", h, m, s) }
+        return String(format: "%d:%02d", m, s)
     }
 
     // MARK: - Control Bar

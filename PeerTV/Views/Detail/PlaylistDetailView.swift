@@ -271,13 +271,15 @@ struct PlaylistDetailView: View {
                                                     videoId: video.stableId,
                                                     apiClient: session.apiClient,
                                                     accessToken: session.tokenStore.accessToken,
+                                                    accountId: session.activeAccountId,
                                                     playlistQueue: queue
                                                 )
                                             } else {
                                                 PlayerPresenter.shared.play(
                                                     videoId: video.stableId,
                                                     apiClient: session.apiClient,
-                                                    accessToken: session.tokenStore.accessToken
+                                                    accessToken: session.tokenStore.accessToken,
+                                                    accountId: session.activeAccountId
                                                 )
                                             }
                                         } label: {

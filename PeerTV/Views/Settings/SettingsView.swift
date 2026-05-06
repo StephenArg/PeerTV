@@ -7,6 +7,9 @@ struct SettingsView: View {
     @State private var showVideoDetailRawJSON = DebugFlags.showVideoDetailRawJSON
     @State private var showShuffleRestartAlert = false
     @State private var accountPendingSignOut: UUID?
+    @State private var showClearPositionsAlert = false
+    @State private var savedPositionCount = PlaybackPositionStore.savedPositionCount
+    @State private var resumePlaybackEnabled = PlaybackPositionStore.isEnabled
     // Persisted via the same `UserDefaults` key read by `PlayerSettings.bufferCap` so playback
     // code and the Settings picker stay in sync across launches.
     @AppStorage(PlayerSettings.bufferCapKey) private var bufferCapRawValue: Int = BufferCap.gb1.rawValue
@@ -55,7 +58,22 @@ struct SettingsView: View {
                             Text(cap.displayName).tag(cap.rawValue)
                         }
                     }
-                    Text("Buffer cap is the approximate maximum AVPlayer will keep buffered ahead. Larger caps smooth over slow networks at the cost of memory.")
+                    Text("Buffer cap is the approximate maximum AVPlayer will keep buffered ahead. Larger caps smooth over slow networks at the cost of memory.\n")
+
+                    Toggle("Resume playback", isOn: $resumePlaybackEnabled)
+                    if resumePlaybackEnabled {
+                        Button {
+                            showClearPositionsAlert = true
+                        } label: {
+                            HStack {
+                                Text("Clear saved positions")
+                                Spacer()
+                                Text("\(savedPositionCount) saved")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Text("When enabled, videos resume from where you left off. Positions are cleared when a video finishes (within 7% of the end).")
                 }
 
                 settingsSection(title: "Downloads") {
@@ -142,6 +160,8 @@ struct SettingsView: View {
         }
         .onAppear {
             showVideoDetailRawJSON = DebugFlags.showVideoDetailRawJSON
+            savedPositionCount = PlaybackPositionStore.savedPositionCount
+            resumePlaybackEnabled = PlaybackPositionStore.isEnabled
         }
         .fullScreenCover(
             isPresented: Binding(
@@ -178,6 +198,18 @@ struct SettingsView: View {
             Button("Later", role: .cancel) {}
         } message: {
             Text("PeerTV must quit and be opened again for the Shuffle tab to appear or disappear.")
+        }
+        .alert("Clear all saved positions?", isPresented: $showClearPositionsAlert) {
+            Button("Clear All", role: .destructive) {
+                PlaybackPositionStore.clearAll()
+                savedPositionCount = 0
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will remove \(savedPositionCount) saved playback positions. Videos will start from the beginning.")
+        }
+        .onChange(of: resumePlaybackEnabled) { _, newValue in
+            PlaybackPositionStore.isEnabled = newValue
         }
     }
 

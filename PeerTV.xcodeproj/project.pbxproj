@@ -52,6 +52,7 @@
 		C68FA32F30E6ECA50F217955 /* VideoPlaylist.swift in Sources */ = {isa = PBXBuildFile; fileRef = 942FE90E12B0B47F1E47A3B2 /* VideoPlaylist.swift */; };
 		CC11223344556677AABB0001 /* ShuffleViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11223344556677AABB0002 /* ShuffleViewModel.swift */; };
 		CC99001122334455AA66BB02 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC99001122334455AA66BB01 /* AppTheme.swift */; };
+		CO11223344556677AABB0001 /* CaptionOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CO11223344556677AABB0002 /* CaptionOverlayView.swift */; };
 		D465A444AB99F93D4FBC639D /* ThumbnailURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08E2476F69BB53E8D572601B /* ThumbnailURL.swift */; };
 		DBF17753E6C492D03CEFBDF6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 487CD46A4F75DFE6C3DE79FD /* Assets.xcassets */; };
 		DD11223344556677AABB0001 /* PlayerLoaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD11223344556677AABB0002 /* PlayerLoaderView.swift */; };
@@ -74,10 +75,10 @@
 		PP11223344556677AABB0001 /* PlayerLoadingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = PP11223344556677AABB0002 /* PlayerLoadingOverlay.swift */; };
 		PP22334444556677AABB0001 /* TransportBarOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = PP22334444556677AABB0002 /* TransportBarOverlay.swift */; };
 		PS22334455667788AABB0001 /* PlayerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = PS22334455667788AABB0002 /* PlayerSettings.swift */; };
+		PPS1223344556677AABB0001 /* PlaybackPositionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPS1223344556677AABB0002 /* PlaybackPositionStore.swift */; };
 		SB33445566778899AABB0001 /* VideoStoryboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = SB33445566778899AABB0002 /* VideoStoryboard.swift */; };
 		VC11223344556677AABB0001 /* VideoCaption.swift in Sources */ = {isa = PBXBuildFile; fileRef = VC11223344556677AABB0002 /* VideoCaption.swift */; };
 		WV11223344556677AABB0001 /* WebVTTParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = WV11223344556677AABB0002 /* WebVTTParser.swift */; };
-		CO11223344556677AABB0001 /* CaptionOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CO11223344556677AABB0002 /* CaptionOverlayView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -126,6 +127,7 @@
 		C1B94BCF6FE05590AA24FC42 /* OAuthModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthModels.swift; sourceTree = "<group>"; };
 		CC11223344556677AABB0002 /* ShuffleViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShuffleViewModel.swift; sourceTree = "<group>"; };
 		CC99001122334455AA66BB01 /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
+		CO11223344556677AABB0002 /* CaptionOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionOverlayView.swift; sourceTree = "<group>"; };
 		D66767032F845D53006685FB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		D6BA5EF17722A7D480F817B6 /* TokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenStore.swift; sourceTree = "<group>"; };
 		DD0AE8B22B3501976B57C409 /* LoginViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginViewModel.swift; sourceTree = "<group>"; };
@@ -150,10 +152,10 @@
 		PP11223344556677AABB0002 /* PlayerLoadingOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerLoadingOverlay.swift; sourceTree = "<group>"; };
 		PP22334444556677AABB0002 /* TransportBarOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportBarOverlay.swift; sourceTree = "<group>"; };
 		PS22334455667788AABB0002 /* PlayerSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerSettings.swift; sourceTree = "<group>"; };
+		PPS1223344556677AABB0002 /* PlaybackPositionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackPositionStore.swift; sourceTree = "<group>"; };
 		SB33445566778899AABB0002 /* VideoStoryboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoStoryboard.swift; sourceTree = "<group>"; };
 		VC11223344556677AABB0002 /* VideoCaption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCaption.swift; sourceTree = "<group>"; };
 		WV11223344556677AABB0002 /* WebVTTParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebVTTParser.swift; sourceTree = "<group>"; };
-		CO11223344556677AABB0002 /* CaptionOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionOverlayView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -359,6 +361,7 @@
 				F6BC9C2DE9B71E55CB67457F /* DebugFlags.swift */,
 				309EB2AFB32E2CDFC102EA12 /* ImageCache.swift */,
 				PS22334455667788AABB0002 /* PlayerSettings.swift */,
+				PPS1223344556677AABB0002 /* PlaybackPositionStore.swift */,
 				WV11223344556677AABB0002 /* WebVTTParser.swift */,
 				BB11001122334455AA66BB01 /* TabBarControllerFocusLock.swift */,
 				08E2476F69BB53E8D572601B /* ThumbnailURL.swift */,
@@ -452,6 +455,7 @@
 				C63231B87BA379DD1729BEFF /* TokenStore.swift in Sources */,
 				2BA8973501BED0219707B68F /* DebugFlags.swift in Sources */,
 				PS22334455667788AABB0001 /* PlayerSettings.swift in Sources */,
+				PPS1223344556677AABB0001 /* PlaybackPositionStore.swift in Sources */,
 				WV11223344556677AABB0001 /* WebVTTParser.swift in Sources */,
 				A58D68D7D25947CD9D266F51 /* ImageCache.swift in Sources */,
 				D465A444AB99F93D4FBC639D /* ThumbnailURL.swift in Sources */,
@@ -508,7 +512,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = R6WYB662P7;
 				INFOPLIST_FILE = PeerTV/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PeerTV;
@@ -519,7 +523,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.verofide.PeerTV;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -565,7 +569,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = R6WYB662P7;
 				INFOPLIST_FILE = PeerTV/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PeerTV;
@@ -576,7 +580,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.verofide.PeerTV;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

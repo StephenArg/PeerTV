@@ -61,7 +61,8 @@ struct SubscriptionsView: View {
                             PlayerPresenter.shared.play(
                                 videoId: video.stableId,
                                 apiClient: session.apiClient,
-                                accessToken: session.tokenStore.accessToken
+                                accessToken: session.tokenStore.accessToken,
+                                accountId: session.activeAccountId
                             )
                         } label: {
                             VideoCardView(video: video)

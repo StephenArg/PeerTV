@@ -108,7 +108,8 @@ struct DownloadedVideosView: View {
                 PlayerPresenter.shared.play(
                     videoId: video.videoId,
                     apiClient: session.apiClient,
-                    accessToken: session.tokenStore.accessToken
+                    accessToken: session.tokenStore.accessToken,
+                    accountId: session.activeAccountId
                 )
             }
         } label: {

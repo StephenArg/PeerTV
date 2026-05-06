@@ -39,6 +39,7 @@ final class PlayerPresenter {
         videoId: String,
         apiClient: PeerTubeAPIClient,
         accessToken: String?,
+        accountId: UUID? = nil,
         playlistQueue: PlaylistPlaybackQueue? = nil
     ) {
         guard !isPresenting else { return }
@@ -65,6 +66,7 @@ final class PlayerPresenter {
                 apiClient: apiClient,
                 playlistQueue: playlistQueue,
                 isLocalDownload: true,
+                accountId: accountId,
                 prefetchedCaptions: prefetch.isEmpty ? nil : prefetch
             )
             return
@@ -137,7 +139,8 @@ final class PlayerPresenter {
                     title: video.name ?? "",
                     apiClient: apiClient,
                     playlistQueue: playlistQueue,
-                    isLocalDownload: false
+                    isLocalDownload: false,
+                    accountId: accountId
                 )
             } catch {
                 PlaybackLog.log.error("videoDetail failed videoId=\(videoId, privacy: .public) \(error.localizedDescription, privacy: .public) \(String(describing: error), privacy: .public)")
@@ -253,6 +256,7 @@ final class PlayerPresenter {
         apiClient: PeerTubeAPIClient,
         playlistQueue: PlaylistPlaybackQueue?,
         isLocalDownload: Bool,
+        accountId: UUID?,
         prefetchedCaptions: [PeerTubeCaption]? = nil
     ) {
         guard let root = Self.keyWindow?.rootViewController else {
@@ -270,6 +274,17 @@ final class PlayerPresenter {
         )
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
+
+        let savedPosition: TimeInterval? = {
+            guard let accountId else { return nil }
+            return PlaybackPositionStore.position(for: videoId, accountId: accountId)
+        }()
+        if let pos = savedPosition, pos > 0 {
+            let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+            item.seek(to: CMTime(seconds: pos, preferredTimescale: 600), toleranceBefore: tolerance, toleranceAfter: tolerance, completionHandler: nil)
+            PlaybackLog.log.notice("resuming playback at \(pos, privacy: .public)s videoId=\(videoId, privacy: .public)")
+        }
+
         let player = AVPlayer(playerItem: item)
 
         let playerVC = AVPlayerViewController()
@@ -293,6 +308,7 @@ final class PlayerPresenter {
             playlistQueue: playlistQueue,
             isLocalDownload: isLocalDownload,
             instanceBaseURL: apiClient.baseURL,
+            accountId: accountId,
             prefetchedCaptions: prefetchedCaptions
         ) { [weak self] in
             self?.isPresenting = false
@@ -410,6 +426,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private let apiClient: PeerTubeAPIClient?
     /// Snapshot from `apiClient.baseURL` at presentation time (avoids MainActor isolation in delegate methods).
     private let instanceBaseURL: URL?
+    /// Account ID for storing playback positions per-account.
+    private let accountId: UUID?
     private var playlistQueue: PlaylistPlaybackQueue?
     private var currentLabel: String
     private var currentSpeed: Float = 1.0
@@ -441,6 +459,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
          playlistQueue: PlaylistPlaybackQueue?,
          isLocalDownload: Bool,
          instanceBaseURL: URL?,
+         accountId: UUID?,
          prefetchedCaptions: [PeerTubeCaption]? = nil,
          onDismiss: @escaping () -> Void) {
         self.resolutions = resolutions
@@ -453,6 +472,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         self.title = title
         self.apiClient = apiClient
         self.instanceBaseURL = instanceBaseURL
+        self.accountId = accountId
         self.playlistQueue = playlistQueue
         self.isLocalDownload = isLocalDownload
         self.onDismiss = onDismiss
@@ -806,11 +826,13 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private func userRequestedSkipToNextPlaylistItem() {
         guard !isSwitching, Self.playlistHasNextItem(after: playlistQueue) else { return }
         reportCurrentTime()
+        savePlaybackPosition()
         advanceToNextPlaylistItemIfPossible()
     }
 
     private func handlePlaybackEnded() {
         reportCurrentTime()
+        clearPlaybackPosition()
         if let queue = playlistQueue,
            queue.autoplayEnabled,
            queue.currentIndex + 1 < queue.videoIds.count {
@@ -982,6 +1004,28 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         }
     }
 
+    private func savePlaybackPosition() {
+        guard let accountId, let player else { return }
+        let currentTime = CMTimeGetSeconds(player.currentTime())
+        guard currentTime.isFinite else { return }
+        let duration: TimeInterval = {
+            guard let item = player.currentItem else { return 0 }
+            let d = CMTimeGetSeconds(item.duration)
+            return d.isFinite ? d : 0
+        }()
+        PlaybackPositionStore.save(
+            position: currentTime,
+            duration: duration,
+            videoId: videoId,
+            accountId: accountId
+        )
+    }
+
+    private func clearPlaybackPosition() {
+        guard let accountId else { return }
+        PlaybackPositionStore.remove(videoId: videoId, accountId: accountId)
+    }
+
     // MARK: Delegate
 
     func playerViewControllerShouldDismiss(_ playerViewController: AVPlayerViewController) -> Bool {
@@ -1001,6 +1045,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         guard !didCallDismiss else { return }
         didCallDismiss = true
         reportCurrentTime()
+        savePlaybackPosition()
         player?.pause()
         statusObservation = nil
         captions = []
