@@ -419,6 +419,8 @@ final class TransportBarOverlayView: UIView {
     let remainingTimeLabel = UILabel()
     /// Small icon next to the elapsed-time label showing play/pause state or skim direction + stage.
     let stateIndicator = StateIndicatorView()
+    /// Approximate buffer download speed shown next to the state indicator.
+    let downloadSpeedLabel = UILabel()
     /// Floating thumbnail popover shown above the cursor during skim or visual-scrub preview.
     let thumbnailPreview = ThumbnailPreviewView()
     private var thumbnailXConstraint: NSLayoutConstraint!
@@ -449,6 +451,7 @@ final class TransportBarOverlayView: UIView {
         currentTimeLabel.alpha = alpha
         remainingTimeLabel.alpha = alpha
         stateIndicator.alpha = alpha
+        downloadSpeedLabel.alpha = alpha
         thumbnailPreview.alpha = alpha
         trackControl.setChromeAlpha(alpha)
     }
@@ -544,6 +547,12 @@ final class TransportBarOverlayView: UIView {
         // Hidden until we have a valid duration; prevents the play-icon showing before the
         // elapsed-time label has been populated on initial load / playlist transitions.
         stateIndicator.isHidden = true
+        downloadSpeedLabel.translatesAutoresizingMaskIntoConstraints = false
+        downloadSpeedLabel.textColor = UIColor.white.withAlphaComponent(0.72)
+        downloadSpeedLabel.font = .monospacedDigitSystemFont(ofSize: 24, weight: .bold)
+        downloadSpeedLabel.textAlignment = .left
+        downloadSpeedLabel.isHidden = false
+        downloadSpeedLabel.text = "0 MB/s"
 
         thumbnailPreview.translatesAutoresizingMaskIntoConstraints = false
         thumbnailPreview.isHidden = true
@@ -553,6 +562,7 @@ final class TransportBarOverlayView: UIView {
         addSubview(trackControl)
         addSubview(currentTimeLabel)
         addSubview(stateIndicator)
+        addSubview(downloadSpeedLabel)
         addSubview(remainingTimeLabel)
         addSubview(thumbnailPreview)
 
@@ -579,6 +589,9 @@ final class TransportBarOverlayView: UIView {
             // State / skim indicator: right of current time, vertically centered with it.
             stateIndicator.leadingAnchor.constraint(equalTo: currentTimeLabel.trailingAnchor, constant: 12),
             stateIndicator.centerYAnchor.constraint(equalTo: currentTimeLabel.centerYAnchor),
+            downloadSpeedLabel.leadingAnchor.constraint(equalTo: stateIndicator.trailingAnchor, constant: 28),
+            downloadSpeedLabel.centerYAnchor.constraint(equalTo: currentTimeLabel.centerYAnchor),
+            downloadSpeedLabel.trailingAnchor.constraint(lessThanOrEqualTo: remainingTimeLabel.leadingAnchor, constant: -16),
 
             remainingTimeLabel.trailingAnchor.constraint(equalTo: trackControl.trailingAnchor),
             remainingTimeLabel.topAnchor.constraint(equalTo: trackControl.bottomAnchor, constant: TransportBarMetrics.labelSpacing)
@@ -602,6 +615,26 @@ final class TransportBarOverlayView: UIView {
         } else {
             remainingTimeLabel.text = "--:--"
         }
+    }
+
+    func updateDownloadSpeed(_ bytesPerSecond: Double?) {
+        guard let bps = bytesPerSecond, bps > 0 else {
+            downloadSpeedLabel.isHidden = false
+            downloadSpeedLabel.text = "0 MB/s"
+            return
+        }
+        downloadSpeedLabel.text = Self.fmtSpeed(bps)
+    }
+
+    private static func fmtSpeed(_ bytesPerSecond: Double) -> String {
+        if bytesPerSecond >= 1_000_000 {
+            let mbps = bytesPerSecond / 1_000_000
+            return mbps >= 10 ? String(format: "%.0f MB/s", mbps) : String(format: "%.1f MB/s", mbps)
+        }
+        if bytesPerSecond >= 1_000 {
+            return String(format: "%.0f KB/s", bytesPerSecond / 1_000)
+        }
+        return String(format: "%.0f B/s", bytesPerSecond)
     }
 
     private static func fmt(_ seconds: TimeInterval) -> String {
@@ -983,6 +1016,9 @@ final class TransportBarController: NSObject {
     // tap action (play/pause toggle / skim exit / scrub commit).
     private var selectHoldWorkItem: DispatchWorkItem?
     private var selectHoldDidFire: Bool = false
+    private var lastBufferedRangeEnd: TimeInterval = 0
+    private var lastBufferedRangeAt: Date?
+    private var recentDownloadSpeedSamples: [Double] = []
 
     init(
         showsQualityButton: Bool,
@@ -1148,6 +1184,7 @@ final class TransportBarController: NSObject {
         // for the previous item before the new item's duration arrives.
         rootView.barView.stateIndicator.isHidden = true
         rootView.barView.updateLabels(current: 0, duration: 0)
+        rootView.barView.updateDownloadSpeed(nil)
         setupThumbnailGenerator(for: player)
         observePlayer(player)
         registerRemoteCommands()
@@ -1164,6 +1201,10 @@ final class TransportBarController: NSObject {
         pendingScrubCommit = false
         selectHoldWorkItem?.cancel(); selectHoldWorkItem = nil
         selectHoldDidFire = false
+        lastBufferedRangeEnd = 0
+        lastBufferedRangeAt = nil
+        recentDownloadSpeedSamples.removeAll()
+        rootView.barView.updateDownloadSpeed(nil)
         thumbnailRequestWork?.cancel(); thumbnailRequestWork = nil
         thumbnailGenerator?.cancelAllCGImageGeneration()
         thumbnailGenerator = nil
@@ -1291,6 +1332,7 @@ final class TransportBarController: NSObject {
     private func updateBuffered() {
         guard let item = player?.currentItem else {
             rootView.barView.trackControl.bufferedTime = 0
+            rootView.barView.updateDownloadSpeed(nil)
             return
         }
         var end: TimeInterval = 0
@@ -1299,6 +1341,39 @@ final class TransportBarController: NSObject {
             if e.isFinite { end = max(end, e) }
         }
         rootView.barView.trackControl.bufferedTime = end
+        updateApproximateDownloadSpeed(usingBufferedRangeEnd: end)
+    }
+
+    /// Estimates current download speed from buffer growth over wall time.
+    /// This stays intentionally lightweight: no access-log probing and no extra AVPlayer calls.
+    private func updateApproximateDownloadSpeed(usingBufferedRangeEnd end: TimeInterval) {
+        let now = Date()
+        guard let at = lastBufferedRangeAt else {
+            lastBufferedRangeAt = now
+            lastBufferedRangeEnd = end
+            return
+        }
+        let elapsed = now.timeIntervalSince(at)
+        guard elapsed >= 0.35 else { return }
+
+        let delta = end - lastBufferedRangeEnd
+        lastBufferedRangeAt = now
+        lastBufferedRangeEnd = end
+
+        guard delta > 0 else {
+            rootView.barView.updateDownloadSpeed(nil)
+            return
+        }
+
+        // Rough baseline: 8 Mbps ~= 1 MB/s media bitrate.
+        // If buffer grows by N seconds per second, network throughput is roughly N MB/s.
+        let bytesPerSecond = (delta / elapsed) * 1_000_000
+        recentDownloadSpeedSamples.append(bytesPerSecond)
+        if recentDownloadSpeedSamples.count > 4 {
+            recentDownloadSpeedSamples.removeFirst()
+        }
+        let avg = recentDownloadSpeedSamples.reduce(0, +) / Double(recentDownloadSpeedSamples.count)
+        rootView.barView.updateDownloadSpeed(avg)
     }
 
     private func updateHiddenForLiveIfNeeded() {

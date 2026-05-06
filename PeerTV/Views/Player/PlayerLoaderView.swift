@@ -284,7 +284,6 @@ final class PlayerPresenter {
             item.seek(to: CMTime(seconds: pos, preferredTimescale: 600), toleranceBefore: tolerance, toleranceAfter: tolerance, completionHandler: nil)
             PlaybackLog.log.notice("resuming playback at \(pos, privacy: .public)s videoId=\(videoId, privacy: .public)")
         }
-
         let player = AVPlayer(playerItem: item)
 
         let playerVC = AVPlayerViewController()
