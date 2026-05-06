@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ShuffleView: View {
     @EnvironmentObject var session: SessionStore
+    @Environment(\.peerTVShuffleTabStaleRefreshToken) private var shuffleStaleRefreshToken
     @StateObject private var vm = ShuffleViewModel()
     @State private var detailVideoId: String = ""
     @State private var showDetail = false
@@ -76,9 +77,37 @@ struct ShuffleView: View {
         .navigationDestination(isPresented: $showDetail) {
             VideoDetailView(videoId: detailVideoId)
         }
-        .task {
+        .onAppear {
             vm.configure(apiClient: session.apiClient, instanceURL: session.baseURL)
-            await vm.loadRandom()
+            Task {
+                if vm.videos.isEmpty {
+                    await vm.loadRandom()
+                }
+            }
         }
+        .onChange(of: shuffleStaleRefreshToken, initial: false) { _, _ in
+            Task {
+                vm.configure(apiClient: session.apiClient, instanceURL: session.baseURL)
+                await vm.refresh()
+            }
+        }
+        .onChange(of: session.activeAccountId, initial: false) { _, _ in
+            Task {
+                vm.configure(apiClient: session.apiClient, instanceURL: session.baseURL)
+                await vm.refresh()
+            }
+        }
+    }
+}
+
+private struct ShuffleTabStaleRefreshTokenKey: EnvironmentKey {
+    static let defaultValue: Int = 0
+}
+
+extension EnvironmentValues {
+    /// Incremented in `MainTabView` when returning to Shuffle after being on another tab longer than the stale threshold.
+    var peerTVShuffleTabStaleRefreshToken: Int {
+        get { self[ShuffleTabStaleRefreshTokenKey.self] }
+        set { self[ShuffleTabStaleRefreshTokenKey.self] = newValue }
     }
 }

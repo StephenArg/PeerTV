@@ -22,12 +22,12 @@ final class ShuffleViewModel: ObservableObject {
 
         do {
             let randomVideos: [RandomVideo] = try await apiClient.request(.randomVideos)
-            let existingIds = Set(videos.map(\.stableId))
-            var converted = randomVideos
-                .map { $0.toVideo(instanceURL: instanceURL) }
-                .filter { !existingIds.contains($0.stableId) }
-            converted = await Self.enrichChannelAvatars(converted, apiClient: apiClient)
-            videos.append(contentsOf: converted)
+            let converted = randomVideos.map { $0.toVideo(instanceURL: instanceURL) }
+            let enriched = await Self.enrichChannelAvatars(converted, apiClient: apiClient)
+            guard !Task.isCancelled else { return }
+            // Replace the grid each load. Append was wrong here: `.task` on ShuffleView can run
+            // again after the player or detail dismisses, which produced an ever-growing list.
+            videos = enriched
         } catch let error as APIError {
             if case .httpError(let code, _) = error, code == 404 {
                 errorMessage = "Random plugin may not be installed on this instance"

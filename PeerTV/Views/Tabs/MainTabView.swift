@@ -8,6 +8,11 @@ struct MainTabView: View {
     @State private var selectedTab: MainTabSelection = .home
     /// Bumped whenever the Playlists tab is selected so the list refetches (TabView often skips `onAppear` on return).
     @State private var playlistsTabRefreshToken = 0
+    /// Last time the user left the Shuffle tab; used to refetch only after a long absence (see `ShuffleView`).
+    @State private var shuffleTabLeftAt: Date?
+    @State private var shuffleStaleRefreshToken = 0
+
+    private static let shuffleTabStaleAwaySeconds: TimeInterval = 60
 
     init() {
         self.shuffleEnabled = DebugFlags.shuffleTabEnabled
@@ -47,17 +52,28 @@ struct MainTabView: View {
         }
         .environmentObject(playlistEditCoordinator)
         .environment(\.peerTVPlaylistsTabRefreshToken, playlistsTabRefreshToken)
+        .environment(\.peerTVShuffleTabStaleRefreshToken, shuffleStaleRefreshToken)
         .overlay {
             TabBarControllerFocusLock(locked: playlistEditCoordinator.isRepositioning)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
         }
-        .onChange(of: selectedTab) { _, newTab in
+        .onChange(of: selectedTab) { oldTab, newTab in
             if playlistEditCoordinator.isRepositioning && newTab != .playlists {
                 selectedTab = .playlists
             }
             if newTab == .playlists {
                 playlistsTabRefreshToken += 1
+            }
+            if shuffleEnabled {
+                if oldTab == .shuffle {
+                    shuffleTabLeftAt = Date()
+                }
+                if newTab == .shuffle,
+                   let leftAt = shuffleTabLeftAt,
+                   Date().timeIntervalSince(leftAt) > Self.shuffleTabStaleAwaySeconds {
+                    shuffleStaleRefreshToken += 1
+                }
             }
         }
     }

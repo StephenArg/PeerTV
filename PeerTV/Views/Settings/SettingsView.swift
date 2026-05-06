@@ -22,18 +22,15 @@ struct SettingsView: View {
                     .font(.title3)
                     .bold()
 
-                settingsSection(title: "Accounts") {
-                    ForEach(session.sortedAccounts) { account in
-                        accountRow(account)
-                    }
-
-                    Button {
-                        session.beginAddAccount()
+                settingsSection(title: "Downloads") {
+                    NavigationLink {
+                        DownloadedVideosView()
                     } label: {
                         HStack {
-                            Image(systemName: "plus.circle.fill")
-                            Text("Add Account")
+                            Text("Downloaded Videos")
                             Spacer()
+                            Text("\(DownloadManager.shared.downloadedVideos.count) videos")
+                                .foregroundStyle(.secondary)
                             Image(systemName: "chevron.right")
                                 .foregroundStyle(.secondary)
                         }
@@ -42,8 +39,6 @@ struct SettingsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.card)
-                } footer: {
-                    Text("Select an account to use it for the whole app. Sign out removes saved login for that account only. Player, theme, and other app preferences stay shared.")
                 }
 
                 settingsSection(title: "Playback") {
@@ -76,15 +71,18 @@ struct SettingsView: View {
                     Text("When enabled, videos resume from where you left off. Positions are cleared when a video finishes (within 7% of the end).")
                 }
 
-                settingsSection(title: "Downloads") {
-                    NavigationLink {
-                        DownloadedVideosView()
+                settingsSection(title: "Accounts") {
+                    ForEach(session.sortedAccounts) { account in
+                        accountRow(account)
+                    }
+
+                    Button {
+                        session.beginAddAccount()
                     } label: {
                         HStack {
-                            Text("Downloaded Videos")
+                            Image(systemName: "plus.circle.fill")
+                            Text("Add Account")
                             Spacer()
-                            Text("\(DownloadManager.shared.downloadedVideos.count) videos")
-                                .foregroundStyle(.secondary)
                             Image(systemName: "chevron.right")
                                 .foregroundStyle(.secondary)
                         }
@@ -93,6 +91,8 @@ struct SettingsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.card)
+                } footer: {
+                    Text("Select an account to use it for the whole app. Sign out removes saved login for that account only. Player, theme, and other app preferences stay shared.")
                 }
 
                 // settingsSection(title: "Appearance") {
