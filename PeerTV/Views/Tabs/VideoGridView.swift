@@ -208,19 +208,23 @@ struct VideoCardView: View {
                         CachedAsyncImage(url: session.thumbnailURL(path: video.thumbnailPath))
                     }
                     .clipped()
+                    .cornerRadius(10)
 
                 if !video.formattedDuration.isEmpty {
                     Text(video.formattedDuration)
                         .font(.caption2)
                         .monospacedDigit()
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(.black.opacity(0.8))
-                        .cornerRadius(4)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Color.black.opacity(0.85))
+                        )
+                        .drawingGroup()
                         .padding(8)
                 }
             }
-            .cornerRadius(10)
 
             // Avatar + metadata
             HStack(alignment: .top, spacing: 12) {
