@@ -10,6 +10,9 @@ enum PlaybackPositionStore {
     /// percentage of the total duration, the saved position is cleared.
     static let finishedThreshold: Double = 0.07
 
+    /// If playback is within this fraction of the start, treat as not started — no resume UI / seek.
+    static let startedThreshold: Double = 0.03
+
     /// Whether resume playback is enabled. Defaults to true.
     static var isEnabled: Bool {
         get {
@@ -31,6 +34,19 @@ enum PlaybackPositionStore {
         return dict[key]
     }
 
+    /// Returns a resume time only when it is not in the opening or closing window of the video.
+    /// When `durationSeconds` is nil or non‑positive, returns `stored` unchanged (caller has no duration yet).
+    static func effectiveResumePosition(stored: TimeInterval?, durationSeconds: Int?) -> TimeInterval? {
+        guard let pos = stored, pos > 0 else { return nil }
+        guard let d = durationSeconds, d > 0 else { return pos }
+        let duration = TimeInterval(d)
+        let ratio = pos / duration
+        if ratio < startedThreshold { return nil }
+        let remaining = duration - pos
+        if remaining <= duration * finishedThreshold { return nil }
+        return pos
+    }
+
     /// Saves the playback position (in seconds) for a video.
     /// If the position is within `finishedThreshold` of the total duration, the position is
     /// removed instead (video is considered finished).
@@ -41,8 +57,13 @@ enum PlaybackPositionStore {
 
         if duration > 0 {
             let remaining = duration - position
-            let threshold = duration * finishedThreshold
-            if remaining <= threshold {
+            let endThreshold = duration * finishedThreshold
+            if remaining <= endThreshold {
+                dict.removeValue(forKey: key)
+                UserDefaults.standard.set(dict, forKey: positionsKey)
+                return
+            }
+            if position / duration < startedThreshold {
                 dict.removeValue(forKey: key)
                 UserDefaults.standard.set(dict, forKey: positionsKey)
                 return

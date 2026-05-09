@@ -2,6 +2,9 @@ import Foundation
 
 @MainActor
 final class VideoDetailViewModel: ObservableObject {
+    /// Shown after a successful add; used by the detail view for toast styling.
+    static let playlistAddedSuccessMessage = "Video added to playlist"
+
     @Published var video: Video?
     @Published var isLoading = false
     @Published var errorMessage: String?
@@ -9,6 +12,7 @@ final class VideoDetailViewModel: ObservableObject {
 
     @Published var userRating: String = "none"
     @Published var myPlaylists: [VideoPlaylist] = []
+    @Published var myPlaylistsLoaded = false
     @Published var playlistMessage: String?
 
     @Published var comments: [VideoComment] = []
@@ -106,7 +110,12 @@ final class VideoDetailViewModel: ObservableObject {
     // MARK: - Playlists
 
     func loadMyPlaylists() async {
-        guard let apiClient, let name = accountName else { return }
+        myPlaylistsLoaded = false
+        defer { myPlaylistsLoaded = true }
+        guard let apiClient, let name = accountName else {
+            myPlaylists = []
+            return
+        }
         do {
             let response: PaginatedResponse<VideoPlaylist> = try await apiClient.request(
                 .accountPlaylists(name: name, start: 0, count: 100)
@@ -117,14 +126,30 @@ final class VideoDetailViewModel: ObservableObject {
         }
     }
 
-    func addToPlaylist(_ playlistId: Int) async {
+    /// Creates a private playlist then adds the current video.
+    func createPlaylistAndAddVideo(displayName: String) async -> Result<Void, Error> {
+        guard let apiClient else {
+            return .failure(APIError.invalidInput("Not signed in."))
+        }
+        do {
+            let playlistId = try await apiClient.createVideoPlaylist(displayName: displayName)
+            await addToPlaylist(playlistPathId: "\(playlistId)")
+            return .success(())
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            playlistMessage = message
+            return .failure(error)
+        }
+    }
+
+    func addToPlaylist(playlistPathId: String) async {
         guard let apiClient, let numericId = video?.id else { return }
         do {
-            _ = try await apiClient.rawRequest(.addVideoToPlaylist(playlistId: playlistId, videoId: numericId))
-            playlistMessage = "Added to playlist"
+            _ = try await apiClient.rawRequest(.addVideoToPlaylist(playlistPathId: playlistPathId, videoId: numericId))
+            playlistMessage = Self.playlistAddedSuccessMessage
             NotificationCenter.default.post(name: .peerTVPlaylistsNeedRefresh, object: nil)
         } catch {
-            playlistMessage = "Failed to add to playlist"
+            playlistMessage = "Could not add video to playlist"
         }
     }
 

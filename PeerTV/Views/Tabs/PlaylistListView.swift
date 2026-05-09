@@ -1,13 +1,39 @@
 import SwiftUI
 
+private enum PlaylistListGridRow: Identifiable {
+    case playlist(VideoPlaylist)
+    case add
+
+    var id: String {
+        switch self {
+        case .playlist(let p):
+            if let id = p.id { return "playlist-\(id)" }
+            return "playlist-\(p.uuid ?? "unknown")"
+        case .add:
+            return "playlist-add-new"
+        }
+    }
+}
+
 struct PlaylistListView: View {
     @EnvironmentObject var session: SessionStore
     @Environment(\.peerTVPlaylistsTabRefreshToken) private var playlistsTabRefreshToken
     @StateObject private var vm = PlaylistsViewModel()
+    @State private var showNewPlaylistSheet = false
 
     private let columns = [
         GridItem(.adaptive(minimum: 380, maximum: 480), spacing: 30)
     ]
+
+    private var playlistGridRows: [PlaylistListGridRow] {
+        let playlists = vm.playlists.map { PlaylistListGridRow.playlist($0) }
+        // Omit the add tile while the first page is loading so it never appears alone at the
+        // top-left and then jumps to the end when rows arrive (LazyVGrid reflow).
+        if vm.isLoading && vm.playlists.isEmpty {
+            return playlists
+        }
+        return playlists + [.add]
+    }
 
     var body: some View {
         ScrollView {
@@ -17,31 +43,48 @@ struct PlaylistListView: View {
                     .bold()
                     .padding(.horizontal, 50)
 
-                LazyVGrid(columns: columns, spacing: 50) {
-                    ForEach(vm.playlists) { playlist in
-                        NavigationLink(value: playlist) {
-                            PlaylistCardView(playlist: playlist)
-                        }
-                        .buttonStyle(.card)
-                        .onAppear {
-                            if playlist.id == vm.playlists.last?.id {
-                                Task { await vm.loadMore() }
+                if vm.isLoading && vm.playlists.isEmpty {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 80)
+                } else {
+                    LazyVGrid(columns: columns, spacing: 50) {
+                        ForEach(playlistGridRows) { row in
+                            switch row {
+                            case .playlist(let playlist):
+                                NavigationLink(value: playlist) {
+                                    PlaylistCardView(playlist: playlist)
+                                }
+                                .buttonStyle(.card)
+                                .onAppear {
+                                    if playlist.id == vm.playlists.last?.id {
+                                        Task { await vm.loadMore() }
+                                    }
+                                }
+                            case .add:
+                                Button {
+                                    showNewPlaylistSheet = true
+                                } label: {
+                                    AddPlaylistPlaceholderCardView()
+                                }
+                                .buttonStyle(.card)
                             }
                         }
                     }
+                    .padding(.horizontal, 50)
                 }
-                .padding(.horizontal, 50)
             }
             .padding(.top, 40)
             .padding(.bottom, 50)
-
-            if vm.isLoading {
-                ProgressView().padding()
-            }
         }
         .overlay {
             if let error = vm.errorMessage, vm.playlists.isEmpty {
                 ContentUnavailableView(error, systemImage: "exclamationmark.triangle")
+            }
+        }
+        .sheet(isPresented: $showNewPlaylistSheet) {
+            NewPlaylistNamePromptView(title: "New Playlist") { name in
+                await vm.createPlaylist(named: name)
             }
         }
         .onAppear {
@@ -115,6 +158,118 @@ struct PlaylistCardView: View {
                 Text(playlist.ownerAccount?.displayName ?? "")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.top, 14)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
+            .frame(height: 90, alignment: .top)
+        }
+    }
+}
+
+// MARK: - New playlist (shared with video detail picker)
+
+struct NewPlaylistNamePromptView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let title: String
+    let onCreate: (String) async -> Result<Void, Error>
+    var onOuterSuccess: (() -> Void)?
+
+    @State private var name = ""
+    @State private var inlineError: String?
+    @FocusState private var nameFocused: Bool
+
+    init(
+        title: String,
+        onCreate: @escaping (String) async -> Result<Void, Error>,
+        onSuccess: (() -> Void)? = nil
+    ) {
+        self.title = title
+        self.onCreate = onCreate
+        self.onOuterSuccess = onSuccess
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                TextField("Playlist name", text: $name)
+                    #if !os(tvOS)
+                    .textFieldStyle(.roundedBorder)
+                    #endif
+                    .focused($nameFocused)
+
+                if let inlineError {
+                    Text(inlineError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
+                Spacer()
+            }
+            .padding(24)
+            .frame(minWidth: 420, minHeight: 220)
+            .navigationTitle(title)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        Task { await attemptCreate() }
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .onAppear {
+            inlineError = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                nameFocused = true
+            }
+        }
+    }
+
+    private func attemptCreate() async {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        inlineError = nil
+        switch await onCreate(trimmed) {
+        case .success:
+            dismiss()
+            onOuterSuccess?()
+        case .failure(let error):
+            inlineError = error.localizedDescription
+        }
+    }
+}
+
+private struct AddPlaylistPlaceholderCardView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .bottomTrailing) {
+                Color.gray.opacity(0.15)
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .overlay {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 52))
+                            .foregroundStyle(.secondary)
+                    }
+                    .clipped()
+                    .cornerRadius(10)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("New playlist")
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                    .lineLimit(2)
+                    .foregroundStyle(.primary)
+
+                Text(" ")
+                    .font(.caption)
+                    .foregroundStyle(.clear)
                     .lineLimit(1)
             }
             .padding(.top, 14)

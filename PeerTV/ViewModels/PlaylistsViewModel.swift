@@ -11,6 +11,8 @@ final class PlaylistsViewModel: ObservableObject {
     private var total: Int?
     private var apiClient: PeerTubeAPIClient?
     private var accountName: String?
+    /// Prevents overlapping fetches without blocking pagination on `isLoading` (see `loadMore`).
+    private var loadInFlight = false
 
     func configure(apiClient: PeerTubeAPIClient, accountName: String? = nil) {
         self.apiClient = apiClient
@@ -23,8 +25,6 @@ final class PlaylistsViewModel: ObservableObject {
     }
 
     func loadInitial() async {
-        // Clear loading/total so a new fetch always runs (avoids guard failures after cancellation or pagination).
-        isLoading = false
         total = nil
         currentStart = 0
         playlists = []
@@ -32,10 +32,17 @@ final class PlaylistsViewModel: ObservableObject {
     }
 
     func loadMore() async {
-        guard let apiClient, !isLoading, canLoadMore else { return }
-        isLoading = true
+        guard let apiClient, !loadInFlight, canLoadMore else { return }
+        loadInFlight = true
+        let isFirstPageFetch = playlists.isEmpty
+        if isFirstPageFetch {
+            isLoading = true
+        }
         errorMessage = nil
-        defer { isLoading = false }
+        defer {
+            loadInFlight = false
+            isLoading = false
+        }
 
         do {
             let endpoint: Endpoint
@@ -50,6 +57,23 @@ final class PlaylistsViewModel: ObservableObject {
             currentStart += response.items.count
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Creates a private playlist and reloads the grid.
+    func createPlaylist(named displayName: String) async -> Result<Void, Error> {
+        guard let apiClient else {
+            return .failure(APIError.invalidInput("Not signed in."))
+        }
+        errorMessage = nil
+        do {
+            _ = try await apiClient.createVideoPlaylist(displayName: displayName)
+            NotificationCenter.default.post(name: .peerTVPlaylistsNeedRefresh, object: nil)
+            await loadInitial()
+            return .success(())
+        } catch {
+            errorMessage = error.localizedDescription
+            return .failure(error)
         }
     }
 }

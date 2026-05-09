@@ -13,6 +13,15 @@ struct VideoPlaylist: Decodable, Identifiable, Hashable {
     let ownerAccount: AccountSummary?
     let videoChannel: VideoChannelSummary?
 
+    /// Path segment for `GET/PUT/… /api/v1/video-playlists/{id}`. PeerTube often returns **404** for non-public playlists when using the numeric id; the **UUID** works for unlisted/private when you are allowed to view the playlist.
+    var peertubePlaylistPathId: String? {
+        if let u = uuid?.trimmingCharacters(in: .whitespacesAndNewlines), !u.isEmpty {
+            return u
+        }
+        if let id { return "\(id)" }
+        return nil
+    }
+
     /// Include fields that affect list tiles and navigation labels. Using only `id` made SwiftUI treat
     /// refetched playlists as unchanged, so `videosLength` and thumbnails never updated on screen.
     func hash(into hasher: inout Hasher) {
@@ -21,6 +30,7 @@ struct VideoPlaylist: Decodable, Identifiable, Hashable {
         hasher.combine(thumbnailPath)
         hasher.combine(displayName)
         hasher.combine(updatedAt)
+        hasher.combine(privacy?.id)
     }
 
     static func == (lhs: VideoPlaylist, rhs: VideoPlaylist) -> Bool {
@@ -29,12 +39,19 @@ struct VideoPlaylist: Decodable, Identifiable, Hashable {
             && lhs.thumbnailPath == rhs.thumbnailPath
             && lhs.displayName == rhs.displayName
             && lhs.updatedAt == rhs.updatedAt
+            && lhs.privacy?.id == rhs.privacy?.id
     }
 }
 
 struct PlaylistPrivacy: Decodable {
     let id: Int?
     let label: String?
+}
+
+/// Row for the playlist privacy picker (`GET /api/v1/video-playlists/privacies` → `{"1":"Public",…}`).
+struct VideoPlaylistPrivacyMenuItem: Identifiable, Hashable {
+    let id: Int
+    let label: String
 }
 
 struct PlaylistElement: Decodable, Identifiable {

@@ -3,6 +3,7 @@ import SwiftUI
 struct PlaylistDetailView: View {
     @EnvironmentObject var session: SessionStore
     @EnvironmentObject var playlistEditCoordinator: PlaylistEditCoordinator
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var vm: PlaylistDetailViewModel
     @State private var detailVideoId: String = ""
     @State private var showDetail = false
@@ -20,6 +21,11 @@ struct PlaylistDetailView: View {
     @State private var allVideoIds: [String]?
     @State private var showDownloadQualityPicker = false
     @State private var showRemoveDownloadsConfirm = false
+    @State private var showDeletePlaylistConfirm = false
+    @State private var playlistDeleteFailureMessage: String?
+    @State private var showPlaylistPrivacyPicker = false
+    @State private var showPublicChannelPicker = false
+    @State private var playlistPrivacyFailureMessage: String?
 
     private struct RepositionState {
         let movedElementId: Int
@@ -32,8 +38,8 @@ struct PlaylistDetailView: View {
         GridItem(.adaptive(minimum: 380, maximum: 480), spacing: 30)
     ]
 
-    init(playlistId: Int) {
-        _vm = StateObject(wrappedValue: PlaylistDetailViewModel(playlistId: playlistId))
+    init(playlistId: Int, initialPlaylistPathId: String? = nil) {
+        _vm = StateObject(wrappedValue: PlaylistDetailViewModel(playlistId: playlistId, initialPlaylistPathId: initialPlaylistPathId))
         let key = Self.playlistAutoplayDefaultsKey(playlistId: playlistId)
         let initialAutoplay: Bool
         if UserDefaults.standard.object(forKey: key) == nil {
@@ -128,67 +134,97 @@ struct PlaylistDetailView: View {
                                     .buttonStyle(.card)
                                 }
 
-                                Button {
-                                    playlistAutoplayEnabled.toggle()
-                                } label: {
-                                    HStack(spacing: 20) {
-                                        Image(systemName: playlistAutoplayEnabled ? "repeat.circle.fill" : "repeat.circle")
-                                        Text("Autoplay")
-                                    }
-                                    .font(.callout)
-                                    .padding(.horizontal, 48)
-                                    .padding(.vertical, 12)
-                                }
-                                .buttonStyle(.card)
-                                .accessibilityValue(playlistAutoplayEnabled ? "On" : "Off")
-
-                                if let batch = downloadManager.batchProgress, batch.playlistId == vm.playlistId {
-                                    Button {
-                                        downloadManager.cancelPlaylistBatch()
-                                    } label: {
-                                        HStack(spacing: 16) {
-                                            ProgressView(value: Double(batch.completed), total: Double(max(batch.total, 1)))
-                                                .progressViewStyle(.linear)
-                                                .frame(width: 120)
-                                            Text("\(batch.completed)/\(batch.total)")
-                                                .monospacedDigit()
-                                            Image(systemName: "xmark.circle")
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        .font(.callout)
-                                        .padding(.horizontal, 48)
-                                        .padding(.vertical, 12)
-                                    }
-                                    .buttonStyle(.card)
-                                } else {
-                                    if hasAnyUndownloaded {
+                                if reposition == nil {
+                                    if isEditingPlaylist, session.tokenStore.accessToken != nil {
                                         Button {
-                                            showDownloadQualityPicker = true
+                                            showPlaylistPrivacyPicker = true
                                         } label: {
                                             HStack(spacing: 20) {
-                                                Image(systemName: "arrow.down.circle")
-                                                Text("Download all")
+                                                Image(systemName: "lock.square")
+                                                Text("Privacy")
                                             }
                                             .font(.callout)
                                             .padding(.horizontal, 48)
                                             .padding(.vertical, 12)
                                         }
                                         .buttonStyle(.card)
-                                    }
 
-                                    if allDownloaded {
                                         Button {
-                                            showRemoveDownloadsConfirm = true
+                                            showDeletePlaylistConfirm = true
                                         } label: {
                                             HStack(spacing: 20) {
-                                                Image(systemName: "trash")
-                                                Text("Remove downloads")
+                                                Image(systemName: "trash.circle")
+                                                Text("Delete")
                                             }
                                             .font(.callout)
                                             .padding(.horizontal, 48)
                                             .padding(.vertical, 12)
                                         }
                                         .buttonStyle(.card)
+                                    } else {
+                                        Button {
+                                            playlistAutoplayEnabled.toggle()
+                                        } label: {
+                                            HStack(spacing: 20) {
+                                                Image(systemName: playlistAutoplayEnabled ? "repeat.circle.fill" : "repeat.circle")
+                                                Text("Autoplay")
+                                            }
+                                            .font(.callout)
+                                            .padding(.horizontal, 48)
+                                            .padding(.vertical, 12)
+                                        }
+                                        .buttonStyle(.card)
+                                        .accessibilityValue(playlistAutoplayEnabled ? "On" : "Off")
+
+                                        if let batch = downloadManager.batchProgress, batch.playlistId == vm.playlistId {
+                                            Button {
+                                                downloadManager.cancelPlaylistBatch()
+                                            } label: {
+                                                HStack(spacing: 16) {
+                                                    ProgressView(value: Double(batch.completed), total: Double(max(batch.total, 1)))
+                                                        .progressViewStyle(.linear)
+                                                        .frame(width: 120)
+                                                    Text("\(batch.completed)/\(batch.total)")
+                                                        .monospacedDigit()
+                                                    Image(systemName: "xmark.circle")
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                                .font(.callout)
+                                                .padding(.horizontal, 48)
+                                                .padding(.vertical, 12)
+                                            }
+                                            .buttonStyle(.card)
+                                        } else {
+                                            if hasAnyUndownloaded {
+                                                Button {
+                                                    showDownloadQualityPicker = true
+                                                } label: {
+                                                    HStack(spacing: 20) {
+                                                        Image(systemName: "arrow.down.circle")
+                                                        Text("Download all")
+                                                    }
+                                                    .font(.callout)
+                                                    .padding(.horizontal, 48)
+                                                    .padding(.vertical, 12)
+                                                }
+                                                .buttonStyle(.card)
+                                            }
+
+                                            if allDownloaded {
+                                                Button {
+                                                    showRemoveDownloadsConfirm = true
+                                                } label: {
+                                                    HStack(spacing: 20) {
+                                                        Image(systemName: "trash")
+                                                        Text("Remove downloads")
+                                                    }
+                                                    .font(.callout)
+                                                    .padding(.horizontal, 48)
+                                                    .padding(.vertical, 12)
+                                                }
+                                                .buttonStyle(.card)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -433,10 +469,121 @@ struct PlaylistDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .confirmationDialog(
+            "Delete this playlist?",
+            isPresented: $showDeletePlaylistConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete playlist", role: .destructive) {
+                Task {
+                    if let batch = downloadManager.batchProgress, batch.playlistId == vm.playlistId {
+                        downloadManager.cancelPlaylistBatch()
+                    }
+                    let ok = await vm.deletePlaylist()
+                    if ok {
+                        isEditingPlaylist = false
+                        dismiss()
+                    } else {
+                        playlistDeleteFailureMessage = vm.errorMessage ?? "The playlist could not be deleted."
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the playlist from your account. Downloaded video files are not deleted.")
+        }
+        .alert(
+            "Could not delete playlist",
+            isPresented: Binding(
+                get: { playlistDeleteFailureMessage != nil },
+                set: { if !$0 { playlistDeleteFailureMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(playlistDeleteFailureMessage ?? "")
+        }
+        .confirmationDialog("Playlist privacy", isPresented: $showPlaylistPrivacyPicker, titleVisibility: .visible) {
+            ForEach(vm.playlistPrivacyMenuItems) { item in
+                let currentId = vm.playlist?.privacy?.id
+                let check = currentId == item.id ? " \u{2713}" : ""
+                Button("\(item.label)\(check)") {
+                    Task { await applyPlaylistPrivacyChoice(privacyId: item.id) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Options match your PeerTube server. “Internal” applies to videos, not playlists.")
+        }
+        .confirmationDialog("Channel for public playlist", isPresented: $showPublicChannelPicker, titleVisibility: .visible) {
+            ForEach(Array(vm.accountChannels.enumerated()), id: \.offset) { _, channel in
+                let title = Self.channelPickerTitle(channel)
+                let existingId = vm.playlist?.videoChannel?.id
+                let check = (existingId == channel.id) ? " \u{2713}" : ""
+                Button("\(title)\(check)") {
+                    Task {
+                        guard let id = channel.id else { return }
+                        let ok = await vm.updatePlaylistPrivacy(privacyId: 1, videoChannelId: id)
+                        if !ok {
+                            playlistPrivacyFailureMessage = vm.errorMessage ?? "Privacy could not be updated."
+                        }
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Pick which of your channels this playlist is published on.")
+        }
+        .alert(
+            "Privacy",
+            isPresented: Binding(
+                get: { playlistPrivacyFailureMessage != nil },
+                set: { if !$0 { playlistPrivacyFailureMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(playlistPrivacyFailureMessage ?? "")
+        }
         .task {
-            vm.configure(apiClient: session.apiClient)
+            vm.configure(
+                apiClient: session.apiClient,
+                accountName: session.username.isEmpty ? nil : session.username
+            )
+            async let privacyMenu: () = vm.refreshPlaylistPrivacyMenuItems()
             await vm.loadInitial()
+            await privacyMenu
             allVideoIds = await vm.loadAllPlaylistVideoIds()
+        }
+    }
+
+    private static func channelPickerTitle(_ channel: VideoChannel) -> String {
+        if let d = channel.displayName, !d.isEmpty { return d }
+        if let n = channel.name, !n.isEmpty { return n }
+        return "Channel"
+    }
+
+    @MainActor
+    private func applyPlaylistPrivacyChoice(privacyId: Int) async {
+        if privacyId == 1 {
+            if vm.playlist?.videoChannel?.id != nil {
+                let ok = await vm.updatePlaylistPrivacy(privacyId: 1, videoChannelId: nil)
+                if !ok {
+                    playlistPrivacyFailureMessage = vm.errorMessage ?? "Privacy could not be updated."
+                }
+            } else {
+                await vm.loadAccountChannels()
+                if vm.accountChannels.isEmpty {
+                    playlistPrivacyFailureMessage = vm.errorMessage ?? "No channels found on your account. Create one on the PeerTube website."
+                } else {
+                    showPublicChannelPicker = true
+                }
+            }
+        } else {
+            let ok = await vm.updatePlaylistPrivacy(privacyId: privacyId, videoChannelId: nil)
+            if !ok {
+                playlistPrivacyFailureMessage = vm.errorMessage ?? "Privacy could not be updated."
+            }
         }
     }
 

@@ -105,7 +105,7 @@ private struct SharedNavigationDestinations: ViewModifier {
             }
             .navigationDestination(for: VideoPlaylist.self) { playlist in
                 if let id = playlist.id {
-                    PlaylistDetailView(playlistId: id)
+                    PlaylistDetailView(playlistId: id, initialPlaylistPathId: playlist.peertubePlaylistPathId)
                 }
             }
     }

@@ -55,6 +55,7 @@ final class PlayerPresenter {
             let localTitle = DownloadManager.shared.downloadedVideos.first(where: { $0.videoId == videoId })?.name ?? ""
             let prefetch = DownloadManager.shared.localPeerTubeCaptions(for: videoId)
             // Local downloads have no resolution choice; play the file as-is.
+            let localDuration = DownloadManager.shared.downloadedVideos.first(where: { $0.videoId == videoId })?.duration
             presentPlayer(
                 url: localURL,
                 autoURL: localURL,
@@ -67,7 +68,8 @@ final class PlayerPresenter {
                 playlistQueue: playlistQueue,
                 isLocalDownload: true,
                 accountId: accountId,
-                prefetchedCaptions: prefetch.isEmpty ? nil : prefetch
+                prefetchedCaptions: prefetch.isEmpty ? nil : prefetch,
+                durationSeconds: localDuration
             )
             return
         }
@@ -140,7 +142,8 @@ final class PlayerPresenter {
                     apiClient: apiClient,
                     playlistQueue: playlistQueue,
                     isLocalDownload: false,
-                    accountId: accountId
+                    accountId: accountId,
+                    durationSeconds: video.duration
                 )
             } catch {
                 PlaybackLog.log.error("videoDetail failed videoId=\(videoId, privacy: .public) \(error.localizedDescription, privacy: .public) \(String(describing: error), privacy: .public)")
@@ -257,7 +260,8 @@ final class PlayerPresenter {
         playlistQueue: PlaylistPlaybackQueue?,
         isLocalDownload: Bool,
         accountId: UUID?,
-        prefetchedCaptions: [PeerTubeCaption]? = nil
+        prefetchedCaptions: [PeerTubeCaption]? = nil,
+        durationSeconds: Int? = nil
     ) {
         guard let root = Self.keyWindow?.rootViewController else {
             PlaybackLog.log.error("presentPlayer: no root VC videoId=\(videoId, privacy: .public)")
@@ -275,11 +279,15 @@ final class PlayerPresenter {
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
 
-        let savedPosition: TimeInterval? = {
+        let rawSaved: TimeInterval? = {
             guard let accountId else { return nil }
             return PlaybackPositionStore.position(for: videoId, accountId: accountId)
         }()
-        if let pos = savedPosition, pos > 0 {
+        let resumeSeconds = PlaybackPositionStore.effectiveResumePosition(
+            stored: rawSaved,
+            durationSeconds: durationSeconds
+        )
+        if let pos = resumeSeconds, pos > 0 {
             let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
             item.seek(to: CMTime(seconds: pos, preferredTimescale: 600), toleranceBefore: tolerance, toleranceAfter: tolerance, completionHandler: nil)
             PlaybackLog.log.notice("resuming playback at \(pos, privacy: .public)s videoId=\(videoId, privacy: .public)")
@@ -449,7 +457,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     /// Currently displayed caption track (`nil` = Off).
     private var selectedCaptionLanguage: String?
 
-    private static let speeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+    private static let speeds: [Float] = [2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
     private static let watchReportInterval: Double = 30
 
     init(resolutions: [ResolutionOption], autoURL: URL, initialLabel: String, accessToken: String?,

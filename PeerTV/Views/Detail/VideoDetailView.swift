@@ -21,6 +21,10 @@ struct VideoDetailView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 200)
                 } else if let video = vm.video {
+                    let resumeAt = PlaybackPositionStore.effectiveResumePosition(
+                        stored: savedPosition,
+                        durationSeconds: video.duration
+                    )
                     HStack(alignment: .top, spacing: 50) {
                         // Left: preview + play + control bar
                         VStack(spacing: 24) {
@@ -48,7 +52,7 @@ struct VideoDetailView: View {
                                             .foregroundStyle(.white)
                                             .shadow(radius: 10)
 
-                                        if let pos = savedPosition {
+                                        if let pos = resumeAt {
                                             Text("Resume at \(formatTime(pos))")
                                                 .font(.callout)
                                                 .fontWeight(.medium)
@@ -61,9 +65,9 @@ struct VideoDetailView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 16))
                             }
                             .buttonStyle(.card)
-                            .accessibilityLabel(savedPosition != nil ? "Resume video" : "Play video")
+                            .accessibilityLabel(resumeAt != nil ? "Resume video" : "Play video")
 
-                            if savedPosition != nil {
+                            if resumeAt != nil {
                                 Button {
                                     if let accountId = session.activeAccountId {
                                         PlaybackPositionStore.remove(videoId: vm.videoId, accountId: accountId)
@@ -316,22 +320,40 @@ struct VideoDetailView: View {
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity)
-        .overlay(
-            Group {
-                if let message = vm.playlistMessage {
-                    Text(message)
-                        .font(.caption)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial)
-                        .cornerRadius(8)
-                        .transition(.opacity)
-                        .offset(y: 50)
-                }
-            },
-            alignment: .bottom
+        .overlay(alignment: .bottom) {
+            if let message = vm.playlistMessage {
+                playlistToastBanner(message: message)
+            }
+        }
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: vm.playlistMessage)
+    }
+
+    @ViewBuilder
+    private func playlistToastBanner(message: String) -> some View {
+        let isSuccess = message == VideoDetailViewModel.playlistAddedSuccessMessage
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: isSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.title3)
+            Text(message)
+                .font(.callout)
+                .fontWeight(.semibold)
+                .multilineTextAlignment(.leading)
+        }
+        .foregroundStyle(Color.white)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(isSuccess ? Color.green.opacity(0.94) : Color.red.opacity(0.92))
         )
-        .animation(.easeInOut, value: vm.playlistMessage)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.45), radius: 16, y: 8)
+        .padding(.horizontal, 8)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .offset(y: 56)
     }
 }
 
@@ -340,11 +362,12 @@ struct VideoDetailView: View {
 struct PlaylistPickerView: View {
     @ObservedObject var vm: VideoDetailViewModel
     @Environment(\.dismiss) private var dismiss
+    @State private var showNewPlaylistPrompt = false
 
     var body: some View {
         NavigationStack {
             Group {
-                if vm.myPlaylists.isEmpty {
+                if !vm.myPlaylistsLoaded {
                     VStack(spacing: 16) {
                         ProgressView()
                         Text("Loading playlists…")
@@ -354,11 +377,19 @@ struct PlaylistPickerView: View {
                 } else {
                     ScrollView {
                         VStack(spacing: 12) {
+                            if vm.myPlaylists.isEmpty {
+                                Text("You do not have any playlists yet.")
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 30)
+                                    .padding(.bottom, 8)
+                            }
                             ForEach(vm.myPlaylists) { playlist in
                                 Button {
-                                    guard let playlistId = playlist.id else { return }
+                                    guard let pathId = playlist.peertubePlaylistPathId else { return }
                                     Task {
-                                        await vm.addToPlaylist(playlistId)
+                                        await vm.addToPlaylist(playlistPathId: pathId)
                                         dismiss()
                                     }
                                 } label: {
@@ -385,6 +416,25 @@ struct PlaylistPickerView: View {
                                 }
                                 .buttonStyle(.card)
                             }
+
+                            Button {
+                                showNewPlaylistPrompt = true
+                            } label: {
+                                HStack(spacing: 16) {
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.title3)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 48)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Create new playlist")
+                                            .font(.body)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 30)
+                                .padding(.vertical, 18)
+                            }
+                            .buttonStyle(.card)
                         }
                         .padding(.horizontal, 60)
                         .padding(.vertical, 40)
@@ -392,9 +442,16 @@ struct PlaylistPickerView: View {
                 }
             }
             .navigationTitle("Add to Playlist")
+            .sheet(isPresented: $showNewPlaylistPrompt) {
+                NewPlaylistNamePromptView(title: "New Playlist") { name in
+                    await vm.createPlaylistAndAddVideo(displayName: name)
+                } onSuccess: {
+                    dismiss()
+                }
+            }
         }
         .task {
-            if vm.myPlaylists.isEmpty {
+            if !vm.myPlaylistsLoaded {
                 await vm.loadMyPlaylists()
             }
         }

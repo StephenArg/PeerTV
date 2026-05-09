@@ -34,9 +34,11 @@ enum Endpoint {
 
     // Playlists
     case videoPlaylists(start: Int, count: Int)
+    case videoPlaylistPrivacies
     case accountPlaylists(name: String, start: Int, count: Int)
-    case playlistDetail(id: Int)
-    case playlistVideos(id: Int, start: Int, count: Int)
+    case accountVideoChannels(name: String, start: Int, count: Int)
+    case playlistDetail(playlistPathId: String)
+    case playlistVideos(playlistPathId: String, start: Int, count: Int)
 
     // User
     case usersMe
@@ -46,9 +48,10 @@ enum Endpoint {
     case rateVideo(id: Int, rating: String)
 
     // Playlist actions (auth required)
-    case addVideoToPlaylist(playlistId: Int, videoId: Int)
-    case removePlaylistElement(playlistId: Int, elementId: Int)
-    case reorderPlaylistVideos(playlistId: Int, startPosition: Int, insertAfterPosition: Int, reorderLength: Int)
+    case addVideoToPlaylist(playlistPathId: String, videoId: Int)
+    case removePlaylistElement(playlistPathId: String, elementId: Int)
+    case reorderPlaylistVideos(playlistPathId: String, startPosition: Int, insertAfterPosition: Int, reorderLength: Int)
+    case deletePlaylist(playlistPathId: String)
 
     // Subscription actions (auth required)
     case subscriptionExist(uri: String)
@@ -102,24 +105,30 @@ enum Endpoint {
             return "/api/v1/users/me/history/videos"
         case .videoPlaylists:
             return "/api/v1/video-playlists"
+        case .videoPlaylistPrivacies:
+            return "/api/v1/video-playlists/privacies"
         case .accountPlaylists(let name, _, _):
             return "/api/v1/accounts/\(name)/video-playlists"
-        case .playlistDetail(let id):
-            return "/api/v1/video-playlists/\(id)"
-        case .playlistVideos(let id, _, _):
-            return "/api/v1/video-playlists/\(id)/videos"
+        case .accountVideoChannels(let name, _, _):
+            return "/api/v1/accounts/\(name)/video-channels"
+        case .playlistDetail(let playlistPathId):
+            return "/api/v1/video-playlists/\(playlistPathId)"
+        case .playlistVideos(let playlistPathId, _, _):
+            return "/api/v1/video-playlists/\(playlistPathId)/videos"
         case .usersMe:
             return "/api/v1/users/me"
         case .myVideoRating(let videoId):
             return "/api/v1/users/me/videos/\(videoId)/rating"
         case .rateVideo(let id, _):
             return "/api/v1/videos/\(id)/rate"
-        case .addVideoToPlaylist(let playlistId, _):
-            return "/api/v1/video-playlists/\(playlistId)/videos"
-        case .removePlaylistElement(let playlistId, let elementId):
-            return "/api/v1/video-playlists/\(playlistId)/videos/\(elementId)"
-        case .reorderPlaylistVideos(let playlistId, _, _, _):
-            return "/api/v1/video-playlists/\(playlistId)/videos/reorder"
+        case .addVideoToPlaylist(let playlistPathId, _):
+            return "/api/v1/video-playlists/\(playlistPathId)/videos"
+        case .removePlaylistElement(let playlistPathId, let elementId):
+            return "/api/v1/video-playlists/\(playlistPathId)/videos/\(elementId)"
+        case .reorderPlaylistVideos(let playlistPathId, _, _, _):
+            return "/api/v1/video-playlists/\(playlistPathId)/videos/reorder"
+        case .deletePlaylist(let playlistPathId):
+            return "/api/v1/video-playlists/\(playlistPathId)"
         case .subscriptionExist:
             return "/api/v1/users/me/subscriptions/exist"
         case .subscribe:
@@ -160,6 +169,8 @@ enum Endpoint {
             return paging(start: start, count: count)
         case .accountPlaylists(_, let start, let count):
             return paging(start: start, count: count)
+        case .accountVideoChannels(_, let start, let count):
+            return paging(start: start, count: count)
         case .playlistVideos(_, let start, let count):
             return paging(start: start, count: count)
         case .searchVideos(let search, let start, let count):
@@ -184,7 +195,7 @@ enum Endpoint {
             return "POST"
         case .rateVideo, .watchVideo:
             return "PUT"
-        case .unsubscribe, .removePlaylistElement:
+        case .unsubscribe, .removePlaylistElement, .deletePlaylist:
             return "DELETE"
         default:
             return "GET"
@@ -218,7 +229,7 @@ enum Endpoint {
         switch self {
         case .mySubscriptions, .mySubscriptionVideos, .myHistory, .usersMe,
              .myVideoRating, .rateVideo, .addVideoToPlaylist,
-             .removePlaylistElement, .reorderPlaylistVideos,
+             .removePlaylistElement, .reorderPlaylistVideos, .deletePlaylist,
              .subscriptionExist, .subscribe, .unsubscribe,
              .watchVideo, .videoFileToken, .postVideoComment:
             return true

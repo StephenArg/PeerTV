@@ -139,7 +139,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
             return bar.rootView
         }
 
-        private static let speeds: [Float] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+        private static let speeds: [Float] = [2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
 
         init(resolutions: [ResolutionOption], initialURL: URL, accessToken: String?, title: String, onDismiss: (() -> Void)?) {
             self.resolutions = resolutions
