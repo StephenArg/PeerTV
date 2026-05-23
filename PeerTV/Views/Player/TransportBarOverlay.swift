@@ -15,6 +15,9 @@ private enum TransportBarMetrics {
     static let trackHeight: CGFloat = 11
     static let focusedTrackHeight: CGFloat = 16
     static let playheadSize: CGFloat = 18
+    /// Resume save/resume dead-zone tick marks on the scrubber (3% / 7%-from-end boundaries).
+    static let resumeThresholdMarkerWidth: CGFloat = 2
+    static let resumeThresholdMarkerHeight: CGFloat = 15
     static let trackHitHeight: CGFloat = 40
     static let sideInset: CGFloat = 80
     static let bottomInset: CGFloat = 110
@@ -60,11 +63,15 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
     private let trackContainer = UIView()
     private let bufferedFillView = UIView()
     private let playedFillView = UIView()
+    private let startThresholdMarker = UIView()
+    private let endThresholdMarker = UIView()
     private let playheadDot = UIView()
 
     private var bufferedWidthConstraint: NSLayoutConstraint!
     private var playedWidthConstraint: NSLayoutConstraint!
     private var trackHeightConstraint: NSLayoutConstraint!
+    private var startMarkerCenterX: NSLayoutConstraint!
+    private var endMarkerCenterX: NSLayoutConstraint!
     /// Most recent chrome alpha (track / labels / buttons fade). `didUpdateFocus` multiplies the
     /// playhead dot's focus-driven alpha by this so the dot doesn't pop back in while the bar is
     /// hidden (e.g. after a Speed menu dismissal re-focuses the scrubber over a hidden track).
@@ -111,6 +118,8 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
     func setChromeAlpha(_ alpha: CGFloat) {
         currentChromeAlpha = alpha
         trackContainer.alpha = alpha
+        startThresholdMarker.alpha = alpha
+        endThresholdMarker.alpha = alpha
         playheadDot.alpha = isFocused ? alpha : 0
     }
 
@@ -140,6 +149,11 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
         playedFillView.backgroundColor = .white
         trackContainer.addSubview(playedFillView)
 
+        configureThresholdMarker(startThresholdMarker)
+        configureThresholdMarker(endThresholdMarker)
+        addSubview(startThresholdMarker)
+        addSubview(endThresholdMarker)
+
         playheadDot.translatesAutoresizingMaskIntoConstraints = false
         playheadDot.backgroundColor = .white
         playheadDot.layer.cornerRadius = TransportBarMetrics.playheadSize / 2
@@ -152,6 +166,14 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
         trackHeightConstraint = trackContainer.heightAnchor.constraint(equalToConstant: TransportBarMetrics.trackHeight)
         bufferedWidthConstraint = bufferedFillView.widthAnchor.constraint(equalToConstant: 0)
         playedWidthConstraint = playedFillView.widthAnchor.constraint(equalToConstant: 0)
+        startMarkerCenterX = startThresholdMarker.centerXAnchor.constraint(
+            equalTo: trackContainer.leadingAnchor,
+            constant: 0
+        )
+        endMarkerCenterX = endThresholdMarker.centerXAnchor.constraint(
+            equalTo: trackContainer.leadingAnchor,
+            constant: 0
+        )
 
         NSLayoutConstraint.activate([
             trackContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -168,6 +190,16 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
             playedFillView.topAnchor.constraint(equalTo: trackContainer.topAnchor),
             playedFillView.bottomAnchor.constraint(equalTo: trackContainer.bottomAnchor),
             playedWidthConstraint,
+
+            startThresholdMarker.widthAnchor.constraint(equalToConstant: TransportBarMetrics.resumeThresholdMarkerWidth),
+            startThresholdMarker.heightAnchor.constraint(equalToConstant: TransportBarMetrics.resumeThresholdMarkerHeight),
+            startThresholdMarker.centerYAnchor.constraint(equalTo: trackContainer.centerYAnchor),
+            startMarkerCenterX,
+
+            endThresholdMarker.widthAnchor.constraint(equalToConstant: TransportBarMetrics.resumeThresholdMarkerWidth),
+            endThresholdMarker.heightAnchor.constraint(equalToConstant: TransportBarMetrics.resumeThresholdMarkerHeight),
+            endThresholdMarker.centerYAnchor.constraint(equalTo: trackContainer.centerYAnchor),
+            endMarkerCenterX,
 
             playheadDot.widthAnchor.constraint(equalToConstant: TransportBarMetrics.playheadSize),
             playheadDot.heightAnchor.constraint(equalToConstant: TransportBarMetrics.playheadSize),
@@ -387,11 +419,20 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
         }
     }
 
+    private func configureThresholdMarker(_ marker: UIView) {
+        marker.translatesAutoresizingMaskIntoConstraints = false
+        marker.backgroundColor = UIColor.white.withAlphaComponent(0.9)
+        marker.isUserInteractionEnabled = false
+        marker.isHidden = true
+    }
+
     private func updateFill() {
         let d = duration
         guard d.isFinite, d > 0 else {
             bufferedWidthConstraint.constant = 0
             playedWidthConstraint.constant = 0
+            startThresholdMarker.isHidden = true
+            endThresholdMarker.isHidden = true
             return
         }
         let trackW = trackContainer.bounds.width
@@ -401,6 +442,11 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
         let played = min(1, max(0, effectiveCurrent / d))
         bufferedWidthConstraint.constant = trackW * CGFloat(buf)
         playedWidthConstraint.constant = trackW * CGFloat(played)
+
+        startMarkerCenterX.constant = trackW * CGFloat(PlaybackPositionStore.startedThreshold)
+        endMarkerCenterX.constant = trackW * CGFloat(1 - PlaybackPositionStore.finishedThreshold)
+        startThresholdMarker.isHidden = false
+        endThresholdMarker.isHidden = false
     }
 }
 
