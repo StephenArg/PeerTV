@@ -73,6 +73,7 @@
 		FE8363543BB6E0DFF7C64DC6 /* VideoDetailViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 951214025156C5E7E1755033 /* VideoDetailViewModel.swift */; };
 		FF11223344556677AABB0001 /* SearchViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF11223344556677AABB0002 /* SearchViewModel.swift */; };
 		FF22334455667788AABB0001 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF22334455667788AABB0002 /* SearchView.swift */; };
+		FF33445555667788AABB0001 /* PeerTubeOriginClients.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF33445555667788AABB0002 /* PeerTubeOriginClients.swift */; };
 		PP11223344556677AABB0001 /* PlayerLoadingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = PP11223344556677AABB0002 /* PlayerLoadingOverlay.swift */; };
 		PP22334444556677AABB0001 /* TransportBarOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = PP22334444556677AABB0002 /* TransportBarOverlay.swift */; };
 		PPS1223344556677AABB0001 /* PlaybackPositionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPS1223344556677AABB0002 /* PlaybackPositionStore.swift */; };
@@ -151,6 +152,7 @@
 		FD930FB67E78919F51B313DD /* PlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerView.swift; sourceTree = "<group>"; };
 		FF11223344556677AABB0002 /* SearchViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchViewModel.swift; sourceTree = "<group>"; };
 		FF22334455667788AABB0002 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		FF33445555667788AABB0002 /* PeerTubeOriginClients.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerTubeOriginClients.swift; sourceTree = "<group>"; };
 		PP11223344556677AABB0002 /* PlayerLoadingOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerLoadingOverlay.swift; sourceTree = "<group>"; };
 		PP22334444556677AABB0002 /* TransportBarOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportBarOverlay.swift; sourceTree = "<group>"; };
 		PPS1223344556677AABB0002 /* PlaybackPositionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackPositionStore.swift; sourceTree = "<group>"; };
@@ -186,6 +188,7 @@
 				B744C00B446D33F41689EC00 /* Endpoint.swift */,
 				F7CF7907D68F94DAFE2822DA /* OAuthService.swift */,
 				EE19C427CDD1860AF0C52984 /* PeerTubeAPIClient.swift */,
+				FF33445555667788AABB0002 /* PeerTubeOriginClients.swift */,
 				D6BA5EF17722A7D480F817B6 /* TokenStore.swift */,
 			);
 			path = Networking;
@@ -505,6 +508,7 @@
 				EE11223344556677AABB0001 /* ShuffleView.swift in Sources */,
 				FF11223344556677AABB0001 /* SearchViewModel.swift in Sources */,
 				FF22334455667788AABB0001 /* SearchView.swift in Sources */,
+				FF33445555667788AABB0001 /* PeerTubeOriginClients.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

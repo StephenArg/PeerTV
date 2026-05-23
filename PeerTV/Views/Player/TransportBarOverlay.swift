@@ -552,7 +552,7 @@ final class TransportBarOverlayView: UIView {
         downloadSpeedLabel.font = .monospacedDigitSystemFont(ofSize: 24, weight: .bold)
         downloadSpeedLabel.textAlignment = .left
         downloadSpeedLabel.isHidden = false
-        downloadSpeedLabel.text = "0 MB/s"
+        downloadSpeedLabel.text = "0.0 MB/s"
 
         thumbnailPreview.translatesAutoresizingMaskIntoConstraints = false
         thumbnailPreview.isHidden = true
@@ -620,21 +620,20 @@ final class TransportBarOverlayView: UIView {
     func updateDownloadSpeed(_ bytesPerSecond: Double?) {
         guard let bps = bytesPerSecond, bps > 0 else {
             downloadSpeedLabel.isHidden = false
-            downloadSpeedLabel.text = "0 MB/s"
+            downloadSpeedLabel.text = "0.0 MB/s"
             return
         }
         downloadSpeedLabel.text = Self.fmtSpeed(bps)
     }
 
     private static func fmtSpeed(_ bytesPerSecond: Double) -> String {
+        if bytesPerSecond >= 1_000_000_000 {
+            return String(format: "%.1f GB/s", bytesPerSecond / 1_000_000_000)
+        }
         if bytesPerSecond >= 1_000_000 {
-            let mbps = bytesPerSecond / 1_000_000
-            return mbps >= 10 ? String(format: "%.0f MB/s", mbps) : String(format: "%.1f MB/s", mbps)
+            return String(format: "%.1f MB/s", bytesPerSecond / 1_000_000)
         }
-        if bytesPerSecond >= 1_000 {
-            return String(format: "%.0f KB/s", bytesPerSecond / 1_000)
-        }
-        return String(format: "%.0f B/s", bytesPerSecond)
+        return String(format: "%.1f KB/s", bytesPerSecond / 1_000)
     }
 
     private static func fmt(_ seconds: TimeInterval) -> String {

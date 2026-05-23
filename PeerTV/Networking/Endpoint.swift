@@ -1,5 +1,13 @@
 import Foundation
 
+/// Which search backend query parameters to use (`GET /api/v1/search/videos`).
+enum SearchVideosScope {
+    /// Connected instance (broad privacy filters when logged in).
+    case instance
+    /// SepiaSearch public federation (`sort=-match`, no privacy widening).
+    case global
+}
+
 /// Type-safe endpoint definitions for the PeerTube REST API.
 enum Endpoint {
     // Instance
@@ -62,7 +70,7 @@ enum Endpoint {
     case watchVideo(id: String, currentTime: Int)
 
     // Search
-    case searchVideos(search: String, start: Int, count: Int)
+    case searchVideos(search: String, start: Int, count: Int, scope: SearchVideosScope = .instance)
 
     // Plugins
     case randomVideos
@@ -173,10 +181,17 @@ enum Endpoint {
             return paging(start: start, count: count)
         case .playlistVideos(_, let start, let count):
             return paging(start: start, count: count)
-        case .searchVideos(let search, let start, let count):
-            return paging(start: start, count: count)
+        case .searchVideos(let search, let start, let count, let scope):
+            var items = paging(start: start, count: count)
                 + [URLQueryItem(name: "search", value: search)]
-                + allPrivacyItems()
+            switch scope {
+            case .instance:
+                items.append(contentsOf: allPrivacyItems())
+            case .global:
+                items.append(URLQueryItem(name: "sort", value: "-match"))
+                items.append(URLQueryItem(name: "nsfw", value: "false"))
+            }
+            return items
         case .subscriptionExist(let uri):
             return [URLQueryItem(name: "uris", value: uri)]
         case .randomVideos:
@@ -269,9 +284,10 @@ extension Endpoint {
             return "GET /api/v1/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy) scope=\(scope)"
         case .channelVideos(let handle, let start, let count, let sort, let includeAllPrivacy):
             return "GET …/video-channels/\(handle)/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy)"
-        case .searchVideos(let search, let start, let count):
+        case .searchVideos(let search, let start, let count, let scope):
             let q = String(search.prefix(64))
-            return "GET /api/v1/search/videos q=\(q) start=\(start) count=\(count)"
+            let scopeLabel = scope == .global ? "global" : "instance"
+            return "GET /api/v1/search/videos q=\(q) start=\(start) count=\(count) scope=\(scopeLabel)"
         case .subscriptionExist(let uri):
             return "GET …/subscriptions/exist uri=\(String(uri.prefix(120)))"
         case .subscribe(let uri):

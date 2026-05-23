@@ -28,13 +28,24 @@ final class VideoDetailViewModel: ObservableObject {
     private var apiClient: PeerTubeAPIClient?
     private var accountName: String?
     let videoId: String
+    let originHost: String?
 
-    init(videoId: String) {
+    /// Client set in `configure`; used for playback from the detail screen.
+    private(set) var configuredAPIClient: PeerTubeAPIClient?
+
+    var usesFederatedOrigin: Bool {
+        guard let originHost else { return false }
+        return !originHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    init(videoId: String, originHost: String? = nil) {
         self.videoId = videoId
+        self.originHost = originHost
     }
 
     func configure(apiClient: PeerTubeAPIClient, accountName: String?) {
         self.apiClient = apiClient
+        self.configuredAPIClient = apiClient
         self.accountName = accountName
     }
 

@@ -8,8 +8,11 @@ struct VideoDetailView: View {
     @State private var descriptionExpanded = false
     @State private var savedPosition: TimeInterval?
 
-    init(videoId: String) {
-        _vm = StateObject(wrappedValue: VideoDetailViewModel(videoId: videoId))
+    private let originHost: String?
+
+    init(videoId: String, originHost: String? = nil) {
+        self.originHost = originHost
+        _vm = StateObject(wrappedValue: VideoDetailViewModel(videoId: videoId, originHost: originHost))
     }
 
     var body: some View {
@@ -33,14 +36,14 @@ struct VideoDetailView: View {
                             Button {
                                 PlayerPresenter.shared.play(
                                     videoId: vm.videoId,
-                                    apiClient: session.apiClient,
-                                    accessToken: session.tokenStore.accessToken,
+                                    apiClient: playbackAPIClient,
+                                    accessToken: playbackAccessToken,
                                     accountId: session.activeAccountId
                                 )
                             } label: {
                                 ZStack {
                                     CachedAsyncImage(
-                                        url: session.thumbnailURL(path: video.previewPath ?? video.thumbnailPath)
+                                        url: detailAssetURL(path: video.previewPath ?? video.thumbnailPath)
                                     )
                                     .aspectRatio(16 / 9, contentMode: .fit)
                                     .frame(maxWidth: .infinity)
@@ -75,8 +78,8 @@ struct VideoDetailView: View {
                                     }
                                     PlayerPresenter.shared.play(
                                         videoId: vm.videoId,
-                                        apiClient: session.apiClient,
-                                        accessToken: session.tokenStore.accessToken,
+                                        apiClient: playbackAPIClient,
+                                        accessToken: playbackAccessToken,
                                         accountId: session.activeAccountId
                                     )
                                 } label: {
@@ -115,7 +118,7 @@ struct VideoDetailView: View {
 
                                 HStack(spacing: 14) {
                                     ChannelAvatarView(
-                                        url: session.thumbnailURL(
+                                        url: detailAssetURL(
                                             path: video.channel?.avatars?.first?.path
                                                   ?? video.account?.avatars?.first?.path
                                         )
@@ -220,10 +223,14 @@ struct VideoDetailView: View {
             PlaylistPickerView(vm: vm)
         }
         .task {
-            vm.configure(apiClient: session.apiClient, accountName: session.username.isEmpty ? nil : session.username)
+            let client = detailAPIClient
+            vm.configure(
+                apiClient: client,
+                accountName: vm.usesFederatedOrigin ? nil : (session.username.isEmpty ? nil : session.username)
+            )
             refreshSavedPosition()
             await vm.load()
-            if session.tokenStore.accessToken != nil {
+            if !vm.usesFederatedOrigin, session.tokenStore.accessToken != nil {
                 await vm.loadUserRating()
             }
             await vm.loadComments()
@@ -242,6 +249,29 @@ struct VideoDetailView: View {
     }
 
     // MARK: - Helpers
+
+    private var detailAPIClient: PeerTubeAPIClient {
+        if let host = originHost?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty {
+            return PeerTubeOriginClients.publicClient(forHost: host)
+        }
+        return session.apiClient
+    }
+
+    private var playbackAPIClient: PeerTubeAPIClient {
+        vm.configuredAPIClient ?? detailAPIClient
+    }
+
+    private var playbackAccessToken: String? {
+        vm.usesFederatedOrigin ? nil : session.tokenStore.accessToken
+    }
+
+    private func detailAssetURL(path: String?) -> URL? {
+        PeerTubeAssetURL.resolve(
+            path: path,
+            instanceBase: session.baseURL,
+            federatedHost: originHost ?? vm.video?.originHost
+        )
+    }
 
     private func refreshSavedPosition() {
         if let accountId = session.activeAccountId {

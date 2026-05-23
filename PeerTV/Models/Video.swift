@@ -22,6 +22,13 @@ struct Video: Decodable, Identifiable, Hashable {
 
     var stableId: String { uuid ?? "\(id ?? 0)" }
 
+    /// Federated origin hostname (no scheme), when the video is not on the connected instance.
+    var originHost: String? {
+        let host = channel?.host ?? account?.host
+        let trimmed = host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     func hash(into hasher: inout Hasher) {
         hasher.combine(stableId)
     }

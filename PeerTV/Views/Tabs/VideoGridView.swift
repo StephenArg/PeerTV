@@ -143,8 +143,10 @@ struct VideoGridView: View {
         .navigationDestination(isPresented: $showDetail) {
             VideoDetailView(videoId: detailVideoId)
         }
-        .navigationDestination(isPresented: $showSearch) {
+        .fullScreenCover(isPresented: $showSearch) {
             SearchView()
+                .environmentObject(session)
+                .presentationBackground(.black)
         }
         .confirmationDialog(
             "Sort by",
@@ -197,6 +199,7 @@ struct VideoCardView: View {
     @EnvironmentObject var session: SessionStore
     @Environment(\.isFocused) var isFocused
     let video: Video
+    var showOriginHost: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -205,7 +208,7 @@ struct VideoCardView: View {
                 Color.gray.opacity(0.15)
                     .aspectRatio(16 / 9, contentMode: .fit)
                     .overlay {
-                        CachedAsyncImage(url: session.thumbnailURL(path: video.thumbnailPath))
+                        CachedAsyncImage(url: cardThumbnailURL(path: video.thumbnailPath))
                     }
                     .clipped()
                     .cornerRadius(10)
@@ -229,7 +232,7 @@ struct VideoCardView: View {
             // Avatar + metadata
             HStack(alignment: .top, spacing: 12) {
                 ChannelAvatarView(
-                    url: session.thumbnailURL(
+                    url: cardThumbnailURL(
                         path: video.channel?.avatars?.first?.path
                               ?? video.account?.avatars?.first?.path
                     )
@@ -242,10 +245,17 @@ struct VideoCardView: View {
                         .fontWeight(.semibold)
                         .foregroundStyle(.primary)
 
-                    Text(video.channel?.displayName ?? video.account?.displayName ?? "")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if showOriginHost, let host = video.originHost {
+                        Text(channelLineWithHost(host))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        Text(video.channel?.displayName ?? video.account?.displayName ?? "")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
 
                     metadataLine
                 }
@@ -255,6 +265,29 @@ struct VideoCardView: View {
             .padding(.bottom, 8)
             .frame(height: 120, alignment: .top)
         }
+    }
+
+    private func cardThumbnailURL(path: String?) -> URL? {
+        // Only Sepia Search passes `showOriginHost`; federated thumbnails belong there.
+        // Home and other tabs often list remote videos with `channel.host` set while
+        // relative thumbnail paths are still served from the connected instance.
+        if showOriginHost {
+            return PeerTubeAssetURL.resolve(
+                path: path,
+                instanceBase: session.baseURL,
+                federatedHost: video.originHost
+            )
+        }
+        return session.thumbnailURL(path: path)
+    }
+
+    private func channelLineWithHost(_ host: String) -> String {
+        let name = video.channel?.displayName
+            ?? video.channel?.name
+            ?? video.account?.displayName
+            ?? video.account?.name
+            ?? "Unknown"
+        return "\(name) · \(host)"
     }
 
     private var metadataLine: some View {

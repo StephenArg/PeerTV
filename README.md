@@ -66,7 +66,14 @@ Username/password login via OAuth 2.0 password grant. Tokens are stored in Keych
 - **Settings** — Change instance, log out, Developer settings, API Explorer
 
 ### 4. Search
-Tap the **Search** button on the Home tab to open a dedicated search screen. The native tvOS keyboard appears when you focus the text field. Results are displayed as the same video grid with infinite scroll.
+Tap the **Search** button on the Home tab to open a **full-screen** search experience with the system search bar (`.searchable`). After you pause typing for about three seconds, results update automatically in the same video grid with infinite scroll.
+
+Two search modes are available (segmented control at the top):
+
+- **This instance** (default) — searches your connected PeerTube instance (`GET /api/v1/search/videos` with the same privacy filters as other lists when logged in).
+- **Sepia Search** — searches the public PeerTube federation via [Sepia Search](https://sepiasearch.org) (`https://sepiasearch.org/api/v1/search/videos`). Playback and video detail load from each result’s origin instance; thumbnails show the remote host on cards.
+
+Use **Close** in the toolbar to return to Home.
 
 ### 5. Playback
 - **Single click** a video tile → plays directly in full-screen AVPlayerViewController
@@ -104,7 +111,8 @@ Tap the **Search** button on the Home tab to open a dedicated search screen. The
 | `POST /api/v1/users/me/subscriptions` | Subscribe to a channel |
 | `DELETE /api/v1/users/me/subscriptions/{handle}` | Unsubscribe from a channel |
 | `PUT /api/v1/videos/{id}/watching` | Report watch progress (history) |
-| `GET /api/v1/search/videos` | Search videos (with privacy filters) |
+| `GET /api/v1/search/videos` | Search videos on the connected instance (with privacy filters) |
+| `GET https://sepiasearch.org/api/v1/search/videos` | Sepia Search — public federation search (`sort=-match`) |
 | `GET /plugins/random-video-tab/router/videos/random` | Random videos (plugin) |
 
 ## Debug / API Explorer
