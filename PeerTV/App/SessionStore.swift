@@ -39,6 +39,35 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         activeAccountId?.uuidString ?? "authenticated"
     }
 
+    /// Authenticated API client for a saved account on `host`, if tokens are present.
+    func authenticatedClient(forHost host: String) -> PeerTubeAPIClient? {
+        let key = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return nil }
+        for account in accounts {
+            guard account.host.lowercased() == key else { continue }
+            let store = TokenStore(accountId: account.id)
+            guard store.accessToken != nil else { continue }
+            let client = PeerTubeAPIClient(tokenStore: store)
+            client.baseURL = account.baseURL
+            return client
+        }
+        return nil
+    }
+
+    /// One client per host, in `hosts` order (skips hosts without a signed-in account).
+    func authenticatedClients(forHosts hosts: [String]) -> [PeerTubeAPIClient] {
+        var seen = Set<String>()
+        var clients: [PeerTubeAPIClient] = []
+        for host in hosts {
+            let key = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            if let client = authenticatedClient(forHost: key) {
+                clients.append(client)
+            }
+        }
+        return clients
+    }
+
     /// Accounts (excluding `activeAccountId`) that still have tokens — for “use another account” on the login screen.
     func otherAccountsWithValidTokens() -> [AccountRecord] {
         let current = activeAccountId

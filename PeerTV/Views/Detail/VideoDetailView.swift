@@ -9,9 +9,11 @@ struct VideoDetailView: View {
     @State private var savedPosition: TimeInterval?
 
     private let originHost: String?
+    private let commentReadHost: String?
 
-    init(videoId: String, originHost: String? = nil) {
+    init(videoId: String, originHost: String? = nil, commentReadHost: String? = nil) {
         self.originHost = originHost
+        self.commentReadHost = commentReadHost
         _vm = StateObject(wrappedValue: VideoDetailViewModel(videoId: videoId, originHost: originHost))
     }
 
@@ -38,6 +40,7 @@ struct VideoDetailView: View {
                                     videoId: vm.videoId,
                                     apiClient: playbackAPIClient,
                                     accessToken: playbackAccessToken,
+                                    apiHosts: vm.usesFederatedOrigin ? federatedAPIHosts : nil,
                                     accountId: session.activeAccountId
                                 )
                             } label: {
@@ -80,6 +83,7 @@ struct VideoDetailView: View {
                                         videoId: vm.videoId,
                                         apiClient: playbackAPIClient,
                                         accessToken: playbackAccessToken,
+                                        apiHosts: vm.usesFederatedOrigin ? federatedAPIHosts : nil,
                                         accountId: session.activeAccountId
                                     )
                                 } label: {
@@ -118,10 +122,7 @@ struct VideoDetailView: View {
 
                                 HStack(spacing: 14) {
                                     ChannelAvatarView(
-                                        url: detailAssetURL(
-                                            path: video.channel?.avatars?.first?.path
-                                                  ?? video.account?.avatars?.first?.path
-                                        )
+                                        url: detailAvatarURL(for: video)
                                     )
                                     .frame(width: 52, height: 52)
 
@@ -224,13 +225,28 @@ struct VideoDetailView: View {
         }
         .task {
             let client = detailAPIClient
+            let federated = vm.usesFederatedOrigin
+            let homeHost = session.baseURL?.host?.lowercased()
+            let extraPostHosts = [commentReadHost, originHost]
+                .compactMap { raw in
+                    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    return trimmed.isEmpty ? nil : trimmed
+                }
+                .filter { homeHost == nil || $0.lowercased() != homeHost }
+            let additionalCommentClients = federated
+                ? session.authenticatedClients(forHosts: extraPostHosts)
+                : []
             vm.configure(
                 apiClient: client,
-                accountName: vm.usesFederatedOrigin ? nil : (session.username.isEmpty ? nil : session.username)
+                commentClient: federated ? session.apiClient : client,
+                commentReadHost: commentReadHost,
+                additionalCommentClients: additionalCommentClients,
+                accountName: federated ? nil : (session.username.isEmpty ? nil : session.username),
+                canPostComments: session.tokenStore.accessToken != nil
             )
             refreshSavedPosition()
             await vm.load()
-            if !vm.usesFederatedOrigin, session.tokenStore.accessToken != nil {
+            if !federated, session.tokenStore.accessToken != nil {
                 await vm.loadUserRating()
             }
             await vm.loadComments()
@@ -251,10 +267,21 @@ struct VideoDetailView: View {
     // MARK: - Helpers
 
     private var detailAPIClient: PeerTubeAPIClient {
-        if let host = originHost?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty {
-            return PeerTubeOriginClients.publicClient(forHost: host)
+        if let first = federatedAPIHosts.first {
+            return PeerTubeOriginClients.publicClient(forHost: first)
         }
         return session.apiClient
+    }
+
+    private var federatedAPIHosts: [String] {
+        var seen = Set<String>()
+        var hosts: [String] = []
+        for raw in [commentReadHost, originHost] {
+            let key = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            hosts.append(key)
+        }
+        return hosts
     }
 
     private var playbackAPIClient: PeerTubeAPIClient {
@@ -269,7 +296,23 @@ struct VideoDetailView: View {
         PeerTubeAssetURL.resolve(
             path: path,
             instanceBase: session.baseURL,
-            federatedHost: originHost ?? vm.video?.originHost
+            federatedHost: vm.usesFederatedOrigin ? (originHost ?? vm.video?.originHost) : nil,
+            cacheHost: vm.usesFederatedOrigin ? (commentReadHost ?? federatedAPIHosts.first) : nil
+        )
+    }
+
+    private func detailAvatarURL(for video: Video) -> URL? {
+        let assetCacheHost: String? = {
+            if vm.usesFederatedOrigin {
+                return commentReadHost ?? federatedAPIHosts.first
+            }
+            return session.baseURL?.host
+        }()
+        return PeerTubeAssetURL.resolve(
+            avatars: video.channel?.avatars ?? video.account?.avatars,
+            instanceBase: session.baseURL,
+            federatedHost: vm.usesFederatedOrigin ? (originHost ?? video.originHost) : nil,
+            cacheHost: assetCacheHost
         )
     }
 

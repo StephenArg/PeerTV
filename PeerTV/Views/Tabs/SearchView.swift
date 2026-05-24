@@ -9,24 +9,35 @@ struct SearchView: View {
     @State private var detailOriginHost: String?
     @State private var showDetail = false
     @State private var didLongPress = false
-    /// Defer building `.searchable` until the full-screen cover has painted (avoids a flash of system search chrome).
-    @State private var isContentReady = false
+    @State private var hasFocusedSearchField = false
+    @FocusState private var searchFieldFocused: Bool
+    @FocusState private var searchGridFocusVideoId: String?
 
     private let columns = [
         GridItem(.adaptive(minimum: 380, maximum: 480), spacing: 30)
     ]
 
+    private func searchCellScrollId(videoId: String) -> String {
+        "searchCell-\(videoId)"
+    }
+
     private var trimmedSearchText: String {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var body: some View {
-        ZStack {
-            Color.black
-                .ignoresSafeArea()
+    private var showsSuggestions: Bool {
+        !trimmedSearchText.isEmpty
+            && vm.results.isEmpty
+            && !vm.isLoading
+            && !vm.suggestions.isEmpty
+    }
 
-            if isContentReady {
-            NavigationStack {
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 0) {
+                searchHeader
+
+                ScrollViewReader { scrollProxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 30) {
                         Picker("Search scope", selection: $vm.mode) {
@@ -38,6 +49,22 @@ struct SearchView: View {
                         .padding(.horizontal, 50)
                         .onChange(of: vm.mode) { _, _ in
                             vm.modeDidChange(draftQuery: searchText)
+                        }
+
+                        if showsSuggestions {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(vm.suggestions) { suggestion in
+                                    Button {
+                                        searchText = suggestion.query
+                                        Task { await vm.search(query: suggestion.query) }
+                                    } label: {
+                                        suggestionRow(suggestion)
+                                            .padding(.horizontal, 50)
+                                            .padding(.vertical, 12)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
                         }
 
                         if !vm.activeQuery.isEmpty {
@@ -69,6 +96,8 @@ struct SearchView: View {
                                         )
                                     }
                                     .buttonStyle(.card)
+                                    .focused($searchGridFocusVideoId, equals: video.stableId)
+                                    .id(searchCellScrollId(videoId: video.stableId))
                                     .simultaneousGesture(
                                         LongPressGesture(minimumDuration: 0.5)
                                             .onEnded { _ in
@@ -97,16 +126,28 @@ struct SearchView: View {
                     .padding(.top, 24)
                     .padding(.bottom, 60)
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .peerTVPlayerDismissed)) { note in
+                    guard let id = note.userInfo?["videoId"] as? String else { return }
+                    guard vm.results.contains(where: { $0.stableId == id }) else { return }
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        searchGridFocusVideoId = id
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            scrollProxy.scrollTo(searchCellScrollId(videoId: id), anchor: .center)
+                        }
+                    }
+                }
+                }
                 .overlay {
                     if let error = vm.errorMessage, vm.results.isEmpty {
                         ContentUnavailableView(error, systemImage: "exclamationmark.triangle")
-                    } else if !vm.isLoading && vm.results.isEmpty && !vm.activeQuery.isEmpty {
+                    } else if !vm.isLoading && vm.results.isEmpty && !vm.activeQuery.isEmpty && !showsSuggestions {
                         ContentUnavailableView(
                             "No results for \"\(vm.activeQuery)\"",
                             systemImage: "magnifyingglass",
                             description: Text("Try a different search term.")
                         )
-                    } else if vm.activeQuery.isEmpty && !vm.isLoading {
+                    } else if vm.activeQuery.isEmpty && !vm.isLoading && !showsSuggestions {
                         VStack(spacing: 16) {
                             Image(systemName: "magnifyingglass")
                                 .font(.system(size: 60))
@@ -119,49 +160,45 @@ struct SearchView: View {
                         }
                     }
                 }
-                .navigationTitle("Search")
-                .searchable(text: $searchText, prompt: "Search videos…")
-                .searchSuggestions {
-                    if !trimmedSearchText.isEmpty {
-                        ForEach(vm.suggestions) { suggestion in
-                            suggestionRow(suggestion)
-                                .searchCompletion(suggestion.query)
-                        }
-                    }
-                }
-                .onChange(of: searchText) { _, newValue in
-                    vm.scheduleSearch(query: newValue)
-                }
-                .onSubmit(of: .search) {
-                    let query = trimmedSearchText
-                    guard !query.isEmpty else { return }
-                    Task { await vm.search(query: query) }
-                }
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { dismiss() }
-                    }
-                }
-                .navigationDestination(isPresented: $showDetail) {
-                    VideoDetailView(videoId: detailVideoId, originHost: detailOriginHost)
-                }
             }
             .background(Color.black)
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(isPresented: $showDetail) {
+                VideoDetailView(videoId: detailVideoId, originHost: detailOriginHost)
             }
         }
+        .background(Color.black)
         .presentationBackground(.black)
         .onAppear {
-            isContentReady = false
-            DispatchQueue.main.async {
-                isContentReady = true
+            guard !hasFocusedSearchField else { return }
+            hasFocusedSearchField = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                searchFieldFocused = true
             }
-        }
-        .onDisappear {
-            isContentReady = false
         }
         .task {
             vm.configure(instanceClient: session.apiClient)
         }
+    }
+
+    private var searchHeader: some View {
+        HStack(spacing: 24) {
+            TextField("Search videos…", text: $searchText)
+                .focused($searchFieldFocused)
+                .onSubmit {
+                    let query = trimmedSearchText
+                    guard !query.isEmpty else { return }
+                    Task { await vm.search(query: query) }
+                }
+                .onChange(of: searchText) { _, newValue in
+                    vm.scheduleSearch(query: newValue)
+                }
+
+            Button("Close") { dismiss() }
+        }
+        .padding(.horizontal, 50)
+        .padding(.top, 24)
+        .padding(.bottom, 8)
     }
 
     @ViewBuilder

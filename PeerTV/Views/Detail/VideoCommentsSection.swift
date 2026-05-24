@@ -29,15 +29,20 @@ struct VideoCommentsSection: View {
                         selectableCommentRow(row.comment, depth: row.depth)
                     }
                 }
+                .overlay(alignment: .topTrailing) {
+                    if vm.commentsLoading {
+                        ProgressView()
+                            .padding(8)
+                    }
+                }
             }
 
-            if session.tokenStore.accessToken != nil {
+            if vm.canPostComments {
                 VStack(alignment: .leading, spacing: 12) {
                     TextField("Add a comment…", text: $vm.commentDraft, axis: .vertical)
                         .lineLimit(1...2)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        // Without a cap, a vertical-axis TextField expands to fill spare space when the list above is empty.
                         .frame(maxWidth: .infinity, maxHeight: 100, alignment: .topLeading)
                         .background(.ultraThinMaterial)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -86,7 +91,12 @@ struct VideoCommentsSection: View {
                     }
 
                     ChannelAvatarView(
-                        url: session.thumbnailURL(path: comment.account?.avatars?.first?.path)
+                        url: PeerTubeAssetURL.resolve(
+                            avatars: comment.account?.avatars,
+                            instanceBase: session.baseURL,
+                            federatedHost: comment.account?.host,
+                            cacheHost: vm.commentListHost
+                        )
                     )
                     .frame(width: 36, height: 36)
 
@@ -113,7 +123,7 @@ struct VideoCommentsSection: View {
                                 .font(.caption2)
                                 .foregroundStyle(.orange)
                         }
-                        if let text = comment.text, !text.isEmpty {
+                        if let text = comment.plainText, !text.isEmpty {
                             Text(text)
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
@@ -139,7 +149,7 @@ struct VideoCommentsSection: View {
 
     private func commentAccessibilityLabel(_ comment: VideoComment) -> String {
         let author = comment.account?.displayName ?? comment.account?.name ?? "Unknown"
-        let snippet = (comment.text ?? "").prefix(80)
+        let snippet = (comment.plainText ?? comment.text ?? "").prefix(80)
         return "Comment by \(author). \(snippet)"
     }
 

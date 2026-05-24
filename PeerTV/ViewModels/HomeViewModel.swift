@@ -29,6 +29,7 @@ enum HomeVideoListSort: String, CaseIterable, Identifiable {
 enum HomeVideoScope: String, CaseIterable, Identifiable {
     case all
     case local
+    case fediverseTrending
 
     var id: String { rawValue }
 
@@ -36,6 +37,7 @@ enum HomeVideoScope: String, CaseIterable, Identifiable {
         switch self {
         case .all: "All platforms"
         case .local: "This server only"
+        case .fediverseTrending: "Trending on Fediverse"
         }
     }
 
@@ -44,11 +46,12 @@ enum HomeVideoScope: String, CaseIterable, Identifiable {
         switch self {
         case .all: nil
         case .local: true
+        case .fediverseTrending: nil
         }
     }
 
     /// Order shown in the home platforms dialog.
-    static let dialogOrder: [HomeVideoScope] = [.all, .local]
+    static let dialogOrder: [HomeVideoScope] = [.all, .local, .fediverseTrending]
 }
 
 @MainActor
@@ -71,6 +74,8 @@ final class HomeViewModel: ObservableObject {
     private var isAuthenticated = false
     /// Broad privacy/`include` on global `/videos` — only for admin/moderator on most instances.
     private var includeAllPrivacy = false
+    private var fediverseHotLoaded = false
+    private var fediverseAvatarEnrichmentInFlight = Set<String>()
 
     init() {
         if let saved = UserDefaults.standard.string(forKey: Self.sortDefaultsKey),
@@ -95,6 +100,10 @@ final class HomeViewModel: ObservableObject {
         HomeVideoScope(rawValue: scope) ?? .all
     }
 
+    var showsSortControls: Bool {
+        currentListScope != .fediverseTrending
+    }
+
     func configure(apiClient: PeerTubeAPIClient, isAuthenticated: Bool, includeAllPrivacy: Bool) {
         self.apiClient = apiClient
         self.isAuthenticated = isAuthenticated
@@ -102,6 +111,9 @@ final class HomeViewModel: ObservableObject {
     }
 
     var canLoadMore: Bool {
+        if currentListScope == .fediverseTrending {
+            return !fediverseHotLoaded
+        }
         guard let total else { return true }
         return currentStart < total
     }
@@ -109,6 +121,8 @@ final class HomeViewModel: ObservableObject {
     func loadInitial() async {
         currentStart = 0
         videos = []
+        fediverseHotLoaded = false
+        total = nil
         await loadMore()
     }
 
@@ -119,6 +133,10 @@ final class HomeViewModel: ObservableObject {
     }
 
     func loadMore() async {
+        if currentListScope == .fediverseTrending {
+            await loadFediverseHotIfNeeded()
+            return
+        }
         guard let apiClient, !isLoading, canLoadMore else { return }
         isLoading = true
         errorMessage = nil
@@ -158,5 +176,39 @@ final class HomeViewModel: ObservableObject {
         scope = option.rawValue
         UserDefaults.standard.set(option.rawValue, forKey: Self.scopeDefaultsKey)
         await loadInitial()
+    }
+
+    private func loadFediverseHotIfNeeded() async {
+        guard !fediverseHotLoaded, !isLoading else { return }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            let loaded = try await FediverseHotVideosResponse.fetchVideos()
+            videos = loaded
+            fediverseHotLoaded = true
+            total = loaded.count
+            currentStart = loaded.count
+        } catch {
+            Self.log.error("loadFediverseHot failed error=\(error.localizedDescription, privacy: .public)")
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Lazily loads a channel avatar for one trending row (rate-limited; avoids 429 on peertube.watch).
+    func enrichFediverseAvatar(for videoId: String) async {
+        guard currentListScope == .fediverseTrending,
+              let index = videos.firstIndex(where: { $0.stableId == videoId }),
+              videos[index].channel?.avatars?.isEmpty != false,
+              let readHost = videos[index].commentReadHost,
+              fediverseAvatarEnrichmentInFlight.insert(videoId).inserted else { return }
+        defer { fediverseAvatarEnrichmentInFlight.remove(videoId) }
+
+        guard let avatars = await PeerTubeOriginClients.fetchChannelAvatars(videoId: videoId, host: readHost) else {
+            return
+        }
+        guard index < videos.count, videos[index].stableId == videoId else { return }
+        videos[index] = videos[index].withChannelAvatars(avatars)
     }
 }

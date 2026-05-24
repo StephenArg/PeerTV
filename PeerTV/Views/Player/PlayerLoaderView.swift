@@ -39,6 +39,7 @@ final class PlayerPresenter {
         videoId: String,
         apiClient: PeerTubeAPIClient,
         accessToken: String?,
+        apiHosts: [String]? = nil,
         accountId: UUID? = nil,
         playlistQueue: PlaylistPlaybackQueue? = nil
     ) {
@@ -79,7 +80,17 @@ final class PlayerPresenter {
 
         Task {
             do {
-                let data = try await apiClient.rawRequest(.videoDetail(id: videoId))
+                let data: Data
+                let resolvedClient: PeerTubeAPIClient
+                if let apiHosts, !apiHosts.isEmpty {
+                    (data, resolvedClient) = try await PeerTubeOriginClients.fetchVideoDetail(
+                        videoId: videoId,
+                        hosts: apiHosts
+                    )
+                } else {
+                    data = try await apiClient.rawRequest(.videoDetail(id: videoId))
+                    resolvedClient = apiClient
+                }
                 PlaybackLog.log.notice("videoDetail OK bytes=\(data.count) videoId=\(videoId, privacy: .public)")
                 let decoder = JSONDecoder()
                 decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -104,7 +115,7 @@ final class PlayerPresenter {
                 let playURL = await Self.urlWithHLSTokenIfNeeded(
                     url: url,
                     videoId: videoId,
-                    apiClient: apiClient,
+                    apiClient: resolvedClient,
                     accessToken: accessToken
                 )
 
@@ -126,7 +137,7 @@ final class PlayerPresenter {
                     startURL = await Self.urlWithHLSTokenIfNeeded(
                         url: pick.url,
                         videoId: videoId,
-                        apiClient: apiClient,
+                        apiClient: resolvedClient,
                         accessToken: accessToken
                     )
                 }
@@ -139,7 +150,7 @@ final class PlayerPresenter {
                     accessToken: accessToken,
                     videoId: videoId,
                     title: video.name ?? "",
-                    apiClient: apiClient,
+                    apiClient: resolvedClient,
                     playlistQueue: playlistQueue,
                     isLocalDownload: false,
                     accountId: accountId,

@@ -39,7 +39,7 @@ struct RandomVideo: Decodable, Identifiable, Hashable {
     func toVideo(instanceURL: URL?) -> Video {
         let avatarPath = resolvedOwnerAvatarAbsoluteString(instanceURL: instanceURL)
         let channelAvatars: [ActorImage]? = avatarPath.map {
-            [ActorImage(width: nil, path: $0, createdAt: nil, updatedAt: nil)]
+            [ActorImage(width: nil, height: nil, path: $0, fileUrl: nil, createdAt: nil, updatedAt: nil)]
         }
 
         return Video(

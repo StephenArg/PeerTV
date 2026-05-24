@@ -32,6 +32,14 @@ struct VideoComment: Decodable, Hashable, Identifiable {
         lhs.commentId == rhs.commentId && lhs.createdAt == rhs.createdAt
     }
 
+    /// Plain-text body suitable for UI (PeerTube federated comments often use HTML mentions).
+    var plainText: String? {
+        guard let text else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return HTMLPlainText.string(from: trimmed)
+    }
+
     var relativeDateLabel: String? {
         guard let dateStr = createdAt else { return nil }
         let iso = ISO8601DateFormatter()

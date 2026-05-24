@@ -19,14 +19,101 @@ struct Video: Decodable, Identifiable, Hashable {
     let privacy: VideoPrivacy?
     let streamingPlaylists: [StreamingPlaylist]?
     let files: [VideoFile]?
+    /// When set (e.g. peertube.watch index from hot API), comment threads may be more complete here than on `originHost`.
+    let commentReadHost: String?
 
     var stableId: String { uuid ?? "\(id ?? 0)" }
+
+    init(
+        id: Int?,
+        uuid: String?,
+        name: String?,
+        description: String?,
+        duration: Int?,
+        views: Int?,
+        likes: Int?,
+        dislikes: Int?,
+        createdAt: String?,
+        publishedAt: String?,
+        thumbnailPath: String?,
+        previewPath: String?,
+        embedPath: String?,
+        channel: VideoChannelSummary?,
+        account: AccountSummary?,
+        privacy: VideoPrivacy?,
+        streamingPlaylists: [StreamingPlaylist]?,
+        files: [VideoFile]?,
+        commentReadHost: String? = nil
+    ) {
+        self.id = id
+        self.uuid = uuid
+        self.name = name
+        self.description = description
+        self.duration = duration
+        self.views = views
+        self.likes = likes
+        self.dislikes = dislikes
+        self.createdAt = createdAt
+        self.publishedAt = publishedAt
+        self.thumbnailPath = thumbnailPath
+        self.previewPath = previewPath
+        self.embedPath = embedPath
+        self.channel = channel
+        self.account = account
+        self.privacy = privacy
+        self.streamingPlaylists = streamingPlaylists
+        self.files = files
+        self.commentReadHost = commentReadHost
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(Int.self, forKey: .id)
+        uuid = try c.decodeIfPresent(String.self, forKey: .uuid)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        description = try c.decodeIfPresent(String.self, forKey: .description)
+        duration = try c.decodeIfPresent(Int.self, forKey: .duration)
+        views = try c.decodeIfPresent(Int.self, forKey: .views)
+        likes = try c.decodeIfPresent(Int.self, forKey: .likes)
+        dislikes = try c.decodeIfPresent(Int.self, forKey: .dislikes)
+        createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
+        publishedAt = try c.decodeIfPresent(String.self, forKey: .publishedAt)
+        thumbnailPath = try c.decodeIfPresent(String.self, forKey: .thumbnailPath)
+        previewPath = try c.decodeIfPresent(String.self, forKey: .previewPath)
+        embedPath = try c.decodeIfPresent(String.self, forKey: .embedPath)
+        channel = try c.decodeIfPresent(VideoChannelSummary.self, forKey: .channel)
+        account = try c.decodeIfPresent(AccountSummary.self, forKey: .account)
+        privacy = try c.decodeIfPresent(VideoPrivacy.self, forKey: .privacy)
+        streamingPlaylists = try c.decodeIfPresent([StreamingPlaylist].self, forKey: .streamingPlaylists)
+        files = try c.decodeIfPresent([VideoFile].self, forKey: .files)
+        commentReadHost = nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, uuid, name, description, duration, views, likes, dislikes
+        case createdAt, publishedAt, thumbnailPath, previewPath, embedPath
+        case channel, account, privacy, streamingPlaylists, files
+    }
 
     /// Federated origin hostname (no scheme), when the video is not on the connected instance.
     var originHost: String? {
         let host = channel?.host ?? account?.host
         let trimmed = host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// API hosts to try for federated videos (public index first, then media origin).
+    var federatedAPIHosts: [String] {
+        var seen = Set<String>()
+        var hosts: [String] = []
+        func append(_ host: String?) {
+            let key = host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+            guard !key.isEmpty, seen.insert(key).inserted else { return }
+            hosts.append(key)
+        }
+        append(commentReadHost)
+        append(originHost)
+        return hosts
     }
 
     func hash(into hasher: inout Hasher) {
@@ -66,7 +153,8 @@ struct Video: Decodable, Identifiable, Hashable {
             account: account,
             privacy: privacy,
             streamingPlaylists: streamingPlaylists,
-            files: files
+            files: files,
+            commentReadHost: commentReadHost
         )
     }
 
@@ -231,7 +319,9 @@ struct AccountSummary: Decodable {
 
 struct ActorImage: Decodable {
     let width: Int?
+    let height: Int?
     let path: String?
+    let fileUrl: String?
     let createdAt: String?
     let updatedAt: String?
 }

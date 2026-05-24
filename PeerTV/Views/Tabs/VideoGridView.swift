@@ -4,6 +4,8 @@ struct VideoGridView: View {
     @EnvironmentObject var session: SessionStore
     @StateObject private var vm = HomeViewModel()
     @State private var detailVideoId: String = ""
+    @State private var detailOriginHost: String?
+    @State private var detailCommentReadHost: String?
     @State private var showDetail = false
     @State private var showSearch = false
     @State private var showSortDialog = false
@@ -21,12 +23,16 @@ struct VideoGridView: View {
         "homeCell-\(videoId)"
     }
 
+    private var isFediverseTrending: Bool {
+        vm.currentListScope == .fediverseTrending
+    }
+
     var body: some View {
         ScrollViewReader { scrollProxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 30) {
                     HStack(alignment: .center, spacing: 28) {
-                        Text(vm.currentListSort.displayName)
+                        Text(isFediverseTrending ? "Trending on Fediverse" : vm.currentListSort.displayName)
                             .font(.title3)
                             .bold()
                             .lineLimit(1)
@@ -48,19 +54,21 @@ struct VideoGridView: View {
                             }
                             .buttonStyle(.card)
 
-                            Button {
-                                showSortDialog = true
-                            } label: {
-                                HStack(spacing: 20) {
-                                    Image(systemName: "arrow.up.arrow.down.circle")
-                                    Text("Sort")
-                                        .lineLimit(1)
+                            if vm.showsSortControls {
+                                Button {
+                                    showSortDialog = true
+                                } label: {
+                                    HStack(spacing: 20) {
+                                        Image(systemName: "arrow.up.arrow.down.circle")
+                                        Text("Sort")
+                                            .lineLimit(1)
+                                    }
+                                    .font(.callout)
+                                    .padding(.horizontal, 48)
+                                    .padding(.vertical, 12)
                                 }
-                                .font(.callout)
-                                .padding(.horizontal, 48)
-                                .padding(.vertical, 12)
+                                .buttonStyle(.card)
                             }
-                            .buttonStyle(.card)
 
                             Button {
                                 showScopeDialog = true
@@ -86,14 +94,29 @@ struct VideoGridView: View {
                         ForEach(vm.videos, id: \.stableId) { video in
                             Button {
                                 if didLongPress { didLongPress = false; return }
-                                PlayerPresenter.shared.play(
-                                    videoId: video.stableId,
-                                    apiClient: session.apiClient,
-                                    accessToken: session.tokenStore.accessToken,
-                                    accountId: session.activeAccountId
-                                )
+                                if isFediverseTrending {
+                                    let hosts = video.federatedAPIHosts
+                                    guard let firstHost = hosts.first else { return }
+                                    PlayerPresenter.shared.play(
+                                        videoId: video.stableId,
+                                        apiClient: PeerTubeOriginClients.publicClient(forHost: firstHost),
+                                        accessToken: nil,
+                                        apiHosts: hosts,
+                                        accountId: session.activeAccountId
+                                    )
+                                } else {
+                                    PlayerPresenter.shared.play(
+                                        videoId: video.stableId,
+                                        apiClient: session.apiClient,
+                                        accessToken: session.tokenStore.accessToken,
+                                        accountId: session.activeAccountId
+                                    )
+                                }
                             } label: {
-                                VideoCardView(video: video)
+                                VideoCardView(
+                                    video: video,
+                                    showOriginHost: isFediverseTrending
+                                )
                             }
                             .buttonStyle(.card)
                             .focused($homeGridFocusVideoId, equals: video.stableId)
@@ -103,10 +126,15 @@ struct VideoGridView: View {
                                     .onEnded { _ in
                                         didLongPress = true
                                         detailVideoId = video.stableId
+                                        detailOriginHost = isFediverseTrending ? video.originHost : nil
+                                        detailCommentReadHost = isFediverseTrending ? video.commentReadHost : nil
                                         showDetail = true
                                     }
                             )
                             .onAppear {
+                                if isFediverseTrending {
+                                    Task { await vm.enrichFediverseAvatar(for: video.stableId) }
+                                }
                                 if video.stableId == vm.videos.last?.stableId {
                                     Task { await vm.loadMore() }
                                 }
@@ -141,7 +169,11 @@ struct VideoGridView: View {
             }
         }
         .navigationDestination(isPresented: $showDetail) {
-            VideoDetailView(videoId: detailVideoId)
+            VideoDetailView(
+                videoId: detailVideoId,
+                originHost: detailOriginHost,
+                commentReadHost: detailCommentReadHost
+            )
         }
         .fullScreenCover(isPresented: $showSearch) {
             SearchView()
@@ -231,12 +263,7 @@ struct VideoCardView: View {
 
             // Avatar + metadata
             HStack(alignment: .top, spacing: 12) {
-                ChannelAvatarView(
-                    url: cardThumbnailURL(
-                        path: video.channel?.avatars?.first?.path
-                              ?? video.account?.avatars?.first?.path
-                    )
-                )
+                ChannelAvatarView(url: cardAvatarURL())
                 .frame(width: 44, height: 44)
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -275,10 +302,20 @@ struct VideoCardView: View {
             return PeerTubeAssetURL.resolve(
                 path: path,
                 instanceBase: session.baseURL,
-                federatedHost: video.originHost
+                federatedHost: video.originHost,
+                cacheHost: video.commentReadHost
             )
         }
         return session.thumbnailURL(path: path)
+    }
+
+    private func cardAvatarURL() -> URL? {
+        PeerTubeAssetURL.resolve(
+            avatars: video.channel?.avatars ?? video.account?.avatars,
+            instanceBase: session.baseURL,
+            federatedHost: video.originHost,
+            cacheHost: showOriginHost ? video.commentReadHost : nil
+        )
     }
 
     private func channelLineWithHost(_ host: String) -> String {
