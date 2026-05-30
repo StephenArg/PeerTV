@@ -46,7 +46,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
 
         let asset = Self.makeAsset(url: url, accessToken: accessToken, instanceBaseURL: nil)
         let item = AVPlayerItem(asset: asset)
-        item.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
+        item.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
         let player = AVPlayer(playerItem: item)
         controller.player = player
         controller.delegate = context.coordinator
@@ -166,6 +166,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
                 )
             }
             transportBar?.attach(player: player)
+            transportBar?.preferredPlaybackRate = currentSpeed
         }
 
         /// Hooks periodic playback time into the caption overlay (SwiftUI player has no PeerTube captions).
@@ -192,6 +193,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
             let newSpeed: Float = abs(currentRate - fast) < 0.001 ? 1.0 : fast
             currentSpeed = newSpeed
             player?.rate = newSpeed
+            transportBar?.preferredPlaybackRate = newSpeed
             transportBar?.showSpeedNotification("\(Int(newSpeed))x")
         }
 
@@ -304,7 +306,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
                 instanceBaseURL: nil
             )
             let newItem = AVPlayerItem(asset: asset)
-            newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
+            newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
             player.replaceCurrentItem(with: newItem)
 
             let tolerance = CMTime(seconds: 5, preferredTimescale: 600)
@@ -336,6 +338,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
 
         private func setSpeed(_ speed: Float) {
             currentSpeed = speed
+            transportBar?.preferredPlaybackRate = speed
             if let player, player.rate > 0 {
                 player.rate = speed
             }

@@ -16,6 +16,11 @@ enum BufferCap: Int, CaseIterable, Identifiable {
     case gb10 = 10240
     case gb15 = 15360
 
+    /// AVFoundation treats `preferredForwardBufferDuration` as seconds of media to buffer
+    /// before resuming after a stall. Values in the thousands make the player wait
+    /// indefinitely even when some data is already loaded.
+    static let maxPreferredBufferSeconds: Double = 180
+
     var id: Int { rawValue }
 
     var displayName: String {
@@ -33,6 +38,11 @@ enum BufferCap: Int, CaseIterable, Identifiable {
 
     /// Forward-buffer hint in seconds (MB value × 1 s at the 8 Mbps reference bitrate).
     var preferredBufferSeconds: Double { Double(rawValue) }
+
+    /// Value actually passed to AVPlayer — clamped so stalls remain recoverable.
+    var effectivePreferredBufferSeconds: Double {
+        min(preferredBufferSeconds, Self.maxPreferredBufferSeconds)
+    }
 }
 
 /// User-selectable default playback quality. Matches PeerTube's standard resolution ids

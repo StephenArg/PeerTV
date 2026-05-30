@@ -154,7 +154,8 @@ final class PlayerPresenter {
                     playlistQueue: playlistQueue,
                     isLocalDownload: false,
                     accountId: accountId,
-                    durationSeconds: video.duration
+                    durationSeconds: video.duration,
+                    skipWatchReporting: isPrivatePath
                 )
             } catch {
                 PlaybackLog.log.error("videoDetail failed videoId=\(videoId, privacy: .public) \(error.localizedDescription, privacy: .public) \(String(describing: error), privacy: .public)")
@@ -272,7 +273,8 @@ final class PlayerPresenter {
         isLocalDownload: Bool,
         accountId: UUID?,
         prefetchedCaptions: [PeerTubeCaption]? = nil,
-        durationSeconds: Int? = nil
+        durationSeconds: Int? = nil,
+        skipWatchReporting: Bool = false
     ) {
         guard let root = Self.keyWindow?.rootViewController else {
             PlaybackLog.log.error("presentPlayer: no root VC videoId=\(videoId, privacy: .public)")
@@ -288,7 +290,7 @@ final class PlayerPresenter {
             instanceBaseURL: apiClient.baseURL
         )
         let item = AVPlayerItem(asset: asset)
-        item.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
+        item.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
 
         let rawSaved: TimeInterval? = {
             guard let accountId else { return nil }
@@ -299,11 +301,10 @@ final class PlayerPresenter {
             durationSeconds: durationSeconds
         )
         if let pos = resumeSeconds, pos > 0 {
-            let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
-            item.seek(to: CMTime(seconds: pos, preferredTimescale: 600), toleranceBefore: tolerance, toleranceAfter: tolerance, completionHandler: nil)
-            PlaybackLog.log.notice("resuming playback at \(pos, privacy: .public)s videoId=\(videoId, privacy: .public)")
+            PlaybackLog.log.notice("will resume playback at \(pos, privacy: .public)s once ready videoId=\(videoId, privacy: .public)")
         }
         let player = AVPlayer(playerItem: item)
+        player.automaticallyWaitsToMinimizeStalling = true
 
         let playerVC = AVPlayerViewController()
         playerVC.player = player
@@ -327,7 +328,9 @@ final class PlayerPresenter {
             isLocalDownload: isLocalDownload,
             instanceBaseURL: apiClient.baseURL,
             accountId: accountId,
-            prefetchedCaptions: prefetchedCaptions
+            prefetchedCaptions: prefetchedCaptions,
+            initialResumeAt: resumeSeconds,
+            skipWatchReporting: skipWatchReporting
         ) { [weak self] in
             self?.isPresenting = false
         }
@@ -359,7 +362,6 @@ final class PlayerPresenter {
 
         presenter.present(container, animated: true) {
             PlaybackLog.log.notice("AVPlayerViewController on-screen videoId=\(videoId, privacy: .public)")
-            player.play()
         }
     }
 
@@ -467,6 +469,9 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private var captions: [PeerTubeCaption] = []
     /// Currently displayed caption track (`nil` = Off).
     private var selectedCaptionLanguage: String?
+    private var pendingResumeAt: TimeInterval?
+    private var hasStartedInitialPlayback = false
+    private let skipWatchReporting: Bool
 
     private static let speeds: [Float] = [2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
     private static let watchReportInterval: Double = 30
@@ -479,6 +484,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
          instanceBaseURL: URL?,
          accountId: UUID?,
          prefetchedCaptions: [PeerTubeCaption]? = nil,
+         initialResumeAt: TimeInterval? = nil,
+         skipWatchReporting: Bool = false,
          onDismiss: @escaping () -> Void) {
         self.resolutions = resolutions
         self.autoURL = autoURL
@@ -493,6 +500,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         self.accountId = accountId
         self.playlistQueue = playlistQueue
         self.isLocalDownload = isLocalDownload
+        self.skipWatchReporting = skipWatchReporting
+        self.pendingResumeAt = initialResumeAt.flatMap { $0 > 0 ? $0 : nil }
         self.onDismiss = onDismiss
         super.init()
 
@@ -521,6 +530,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             onTouchHoldEnded: { [weak self] in self?.endTouchHoldBoost() }
         )
         transportBar?.attach(player: player)
+        transportBar?.preferredPlaybackRate = currentSpeed
         fetchStoryboards(for: videoId)
         if let pre = prefetchedCaptions, !pre.isEmpty {
             receivedCaptionsList(pre)
@@ -733,6 +743,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         let newSpeed: Float = abs(currentRate - fast) < 0.001 ? 1.0 : fast
         currentSpeed = newSpeed
         player?.rate = newSpeed
+        transportBar?.preferredPlaybackRate = newSpeed
         transportBar?.showSpeedNotification("\(Int(newSpeed))x")
     }
 
@@ -782,6 +793,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                     PlaybackLog.log.notice("AVPlayerItem readyToPlay videoId=\(self.videoId, privacy: .public)")
                     self.initialLoadObservation?.invalidate()
                     self.initialLoadObservation = nil
+                    self.beginInitialPlaybackIfNeeded()
                 case .failed:
                     let err = item.error
                     PlaybackLog.log.error("AVPlayerItem failed videoId=\(self.videoId, privacy: .public) \(err?.localizedDescription ?? "nil", privacy: .public) underlying=\(String(describing: err), privacy: .public)")
@@ -804,6 +816,44 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                     break
                 }
             }
+        }
+    }
+
+    /// Starts playback once the item is ready. Mid-stream resume seeks on the live player so
+    /// HLS can fetch segments at the target time instead of buffering from t=0.
+    private func beginInitialPlaybackIfNeeded() {
+        guard !hasStartedInitialPlayback else { return }
+        hasStartedInitialPlayback = true
+        guard let player else { return }
+
+        let startAtRate: () -> Void = { [weak self] in
+            guard let self else { return }
+            let rate = self.currentSpeed
+            if player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+               player.currentItem?.isPlaybackLikelyToKeepUp == true {
+                player.playImmediately(atRate: rate)
+            } else {
+                player.play()
+                if abs(player.rate - rate) > 0.001 {
+                    player.rate = rate
+                }
+            }
+        }
+
+        if let resumeAt = pendingResumeAt {
+            pendingResumeAt = nil
+            let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+            player.seek(
+                to: CMTime(seconds: resumeAt, preferredTimescale: 600),
+                toleranceBefore: tolerance,
+                toleranceAfter: tolerance
+            ) { finished in
+                guard finished else { return }
+                DispatchQueue.main.async { startAtRate() }
+            }
+            PlaybackLog.log.notice("resuming playback at \(resumeAt, privacy: .public)s videoId=\(self.videoId, privacy: .public)")
+        } else {
+            startAtRate()
         }
     }
 
@@ -943,7 +993,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                 instanceBaseURL: nextQueue.apiClient.baseURL
             )
             let newItem = AVPlayerItem(asset: asset)
-            newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
+            newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
 
             if let obs = progressTimeObserver, let p = self.player {
                 p.removeTimeObserver(obs)
@@ -1013,6 +1063,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     }
 
     private func reportCurrentTime() {
+        guard !skipWatchReporting else { return }
         guard let player, let apiClient else { return }
         let raw = CMTimeGetSeconds(player.currentTime())
         guard raw.isFinite else { return }
@@ -1240,7 +1291,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                     self.statusObservation = nil
                     // Let the buffer grow to the user-selected cap now that the switch preroll
                     // is done. During preroll we used a tight 8 s so playback resumed quickly.
-                    item.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds
+                    item.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
                     // No explicit second seek — the item was pre-seeked before the player was attached,
                     // so its first buffered range is already at the target time. Just set the rate to
                     // start playback.
@@ -1265,6 +1316,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
     private func setSpeed(_ speed: Float) {
         currentSpeed = speed
+        transportBar?.preferredPlaybackRate = speed
         if let player, player.rate > 0 {
             player.rate = speed
         }

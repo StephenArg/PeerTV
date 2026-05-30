@@ -49,6 +49,31 @@ private enum TransportBarMetrics {
     static let thumbnailHeight: CGFloat = 225
     /// Vertical gap between the thumbnail popover and the top of the scrubber track.
     static let thumbnailGap: CGFloat = 44
+    /// Rolling throughput samples (~4 s at the 0.25 s player tick).
+    static let throughputSmoothingSamples: Int = 16
+    /// Seconds of buffer ahead before we treat the network as "steady" rather than stalled.
+    static let throughputSteadyBufferSeconds: TimeInterval = 8
+    /// Below this buffer-ahead threshold the UI reads as actively buffering.
+    static let throughputLowBufferSeconds: TimeInterval = 4
+    /// Minimum interval between throughput samples.
+    static let throughputSampleInterval: TimeInterval = 0.35
+    /// Throughput below this is treated as idle for display purposes.
+    static let throughputIdleBytesPerSecond: Double = 50_000
+    /// Fallback variant bitrate when the access log has no bitrate yet (8 Mbps).
+    static let throughputFallbackBitrate: Double = 8_000_000
+    /// Minimum buffer-ahead before treating a user resume as safe to force immediately.
+    static let adequateBufferAheadSeconds: TimeInterval = 2
+    /// Minimum gap between automatic stall-recovery attempts (avoids hammering AVPlayer).
+    static let stallRecoveryCooldown: TimeInterval = 1.5
+}
+
+// MARK: - Download throughput display
+
+enum DownloadThroughputDisplay: Equatable {
+    case idle
+    case buffering(speed: Double?)
+    case steady(speed: Double?)
+    case downloading(speed: Double)
 }
 
 // MARK: - Focusable scrubber
@@ -598,7 +623,7 @@ final class TransportBarOverlayView: UIView {
         downloadSpeedLabel.font = .monospacedDigitSystemFont(ofSize: 24, weight: .bold)
         downloadSpeedLabel.textAlignment = .left
         downloadSpeedLabel.isHidden = false
-        downloadSpeedLabel.text = "0.0 MB/s"
+        downloadSpeedLabel.text = ""
 
         thumbnailPreview.translatesAutoresizingMaskIntoConstraints = false
         thumbnailPreview.isHidden = true
@@ -663,13 +688,30 @@ final class TransportBarOverlayView: UIView {
         }
     }
 
-    func updateDownloadSpeed(_ bytesPerSecond: Double?) {
-        guard let bps = bytesPerSecond, bps > 0 else {
-            downloadSpeedLabel.isHidden = false
-            downloadSpeedLabel.text = "0.0 MB/s"
-            return
+    func updateDownloadSpeedDisplay(_ display: DownloadThroughputDisplay) {
+        downloadSpeedLabel.isHidden = false
+        switch display {
+        case .idle:
+            downloadSpeedLabel.text = ""
+            downloadSpeedLabel.textColor = UIColor.white.withAlphaComponent(0.72)
+        case .buffering(let speed):
+            downloadSpeedLabel.textColor = UIColor.white.withAlphaComponent(0.72)
+            if let speed, speed >= TransportBarMetrics.throughputIdleBytesPerSecond {
+                downloadSpeedLabel.text = "buffering · \(Self.fmtSpeed(speed))"
+            } else {
+                downloadSpeedLabel.text = "buffering"
+            }
+        case .steady(let speed):
+            downloadSpeedLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+            if let speed, speed >= TransportBarMetrics.throughputIdleBytesPerSecond {
+                downloadSpeedLabel.text = "\(Self.fmtSpeed(speed)) · steady"
+            } else {
+                downloadSpeedLabel.text = "steady"
+            }
+        case .downloading(let speed):
+            downloadSpeedLabel.textColor = UIColor.white.withAlphaComponent(0.72)
+            downloadSpeedLabel.text = Self.fmtSpeed(speed)
         }
-        downloadSpeedLabel.text = Self.fmtSpeed(bps)
     }
 
     private static func fmtSpeed(_ bytesPerSecond: Double) -> String {
@@ -984,6 +1026,9 @@ final class TransportBarController: NSObject {
     /// which is required for the focus engine to route input here.
     let rootView: TransportBarRootView = TransportBarRootView()
 
+    /// Playback rate to apply on resume (owned by the player coordinator).
+    var preferredPlaybackRate: Float = 1.0
+
     private weak var player: AVPlayer?
 
     private var periodicToken: Any?
@@ -991,6 +1036,7 @@ final class TransportBarController: NSObject {
     private var itemObservation: NSKeyValueObservation?
     private var durationObservation: NSKeyValueObservation?
     private var loadedRangesObservation: NSKeyValueObservation?
+    private var keepUpObservation: NSKeyValueObservation?
 
     private var hideWorkItem: DispatchWorkItem?
     /// Anchor time for the in-progress visual-scrub pan session. Set at the start of the first pan
@@ -1063,7 +1109,16 @@ final class TransportBarController: NSObject {
     private var selectHoldDidFire: Bool = false
     private var lastBufferedRangeEnd: TimeInterval = 0
     private var lastBufferedRangeAt: Date?
-    private var recentDownloadSpeedSamples: [Double] = []
+    private var lastAccessLogBytes: Int64 = 0
+    private var lastThroughputSampleAt: Date?
+    private var recentThroughputSamples: [Double] = []
+    private var throughputEMA: Double?
+    private var lastPositiveThroughputAt: Date?
+    private var cachedBufferedEnd: TimeInterval = 0
+    /// False after an explicit user pause; true while playing or stalled mid-playback.
+    private var userIntendsToPlay = true
+    private var lastStallRecoveryAt: Date?
+    private var isStallRecoveryInFlight = false
 
     init(
         showsQualityButton: Bool,
@@ -1229,7 +1284,10 @@ final class TransportBarController: NSObject {
         // for the previous item before the new item's duration arrives.
         rootView.barView.stateIndicator.isHidden = true
         rootView.barView.updateLabels(current: 0, duration: 0)
-        rootView.barView.updateDownloadSpeed(nil)
+        resetThroughputTracking()
+        userIntendsToPlay = true
+        lastStallRecoveryAt = nil
+        isStallRecoveryInFlight = false
         setupThumbnailGenerator(for: player)
         observePlayer(player)
         registerRemoteCommands()
@@ -1246,10 +1304,7 @@ final class TransportBarController: NSObject {
         pendingScrubCommit = false
         selectHoldWorkItem?.cancel(); selectHoldWorkItem = nil
         selectHoldDidFire = false
-        lastBufferedRangeEnd = 0
-        lastBufferedRangeAt = nil
-        recentDownloadSpeedSamples.removeAll()
-        rootView.barView.updateDownloadSpeed(nil)
+        resetThroughputTracking()
         thumbnailRequestWork?.cancel(); thumbnailRequestWork = nil
         thumbnailGenerator?.cancelAllCGImageGeneration()
         thumbnailGenerator = nil
@@ -1266,6 +1321,7 @@ final class TransportBarController: NSObject {
         itemObservation?.invalidate(); itemObservation = nil
         durationObservation?.invalidate(); durationObservation = nil
         loadedRangesObservation?.invalidate(); loadedRangesObservation = nil
+        keepUpObservation?.invalidate(); keepUpObservation = nil
         player = nil
     }
 
@@ -1303,6 +1359,7 @@ final class TransportBarController: NSObject {
         timeControlObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] _, _ in
             self?.scheduleAutoHideIfNeeded()
             self?.updateIndicator()
+            self?.updateDownloadThroughput()
         }
         itemObservation = player.observe(\.currentItem, options: [.initial, .new]) { [weak self] player, _ in
             self?.rebindItemObservers(player.currentItem)
@@ -1314,6 +1371,9 @@ final class TransportBarController: NSObject {
     private func rebindItemObservers(_ item: AVPlayerItem?) {
         durationObservation?.invalidate(); durationObservation = nil
         loadedRangesObservation?.invalidate(); loadedRangesObservation = nil
+        keepUpObservation?.invalidate(); keepUpObservation = nil
+
+        resetThroughputTracking()
 
         guard let item else {
             rootView.barView.trackControl.duration = 0
@@ -1325,6 +1385,9 @@ final class TransportBarController: NSObject {
         }
         loadedRangesObservation = item.observe(\.loadedTimeRanges, options: [.initial, .new]) { [weak self] _, _ in
             self?.updateBuffered()
+        }
+        keepUpObservation = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] _, _ in
+            self?.tryResumeIfStalled()
         }
     }
 
@@ -1354,6 +1417,8 @@ final class TransportBarController: NSObject {
             rootView.barView.updateLabels(current: cur, duration: duration)
         }
         updateBuffered()
+        updateDownloadThroughput()
+        tryResumeIfStalled()
 
         // Only show the state indicator once we know the video's duration — otherwise the
         // play / pause icon can render before the elapsed-time label has any content.
@@ -1377,7 +1442,7 @@ final class TransportBarController: NSObject {
     private func updateBuffered() {
         guard let item = player?.currentItem else {
             rootView.barView.trackControl.bufferedTime = 0
-            rootView.barView.updateDownloadSpeed(nil)
+            cachedBufferedEnd = 0
             return
         }
         var end: TimeInterval = 0
@@ -1386,39 +1451,230 @@ final class TransportBarController: NSObject {
             if e.isFinite { end = max(end, e) }
         }
         rootView.barView.trackControl.bufferedTime = end
-        updateApproximateDownloadSpeed(usingBufferedRangeEnd: end)
+        cachedBufferedEnd = end
     }
 
-    /// Estimates current download speed from buffer growth over wall time.
-    /// This stays intentionally lightweight: no access-log probing and no extra AVPlayer calls.
-    private func updateApproximateDownloadSpeed(usingBufferedRangeEnd end: TimeInterval) {
+    private func resetThroughputTracking() {
+        lastBufferedRangeEnd = 0
+        lastBufferedRangeAt = nil
+        lastAccessLogBytes = 0
+        lastThroughputSampleAt = nil
+        recentThroughputSamples.removeAll()
+        throughputEMA = nil
+        lastPositiveThroughputAt = nil
+        cachedBufferedEnd = 0
+        rootView.barView.updateDownloadSpeedDisplay(.idle)
+    }
+
+    private func hasAdequateBufferAhead(minSeconds: TimeInterval = TransportBarMetrics.adequateBufferAheadSeconds) -> Bool {
+        guard let player, let item = player.currentItem else { return false }
+        let playhead = CMTimeGetSeconds(player.currentTime())
+        guard playhead.isFinite else { return false }
+
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let start = CMTimeGetSeconds(range.start)
+            let end = CMTimeGetSeconds(CMTimeRangeGetEnd(range))
+            guard start.isFinite, end.isFinite else { continue }
+            if playhead >= start - 0.05, playhead <= end, end - playhead >= minSeconds {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Resumes playback at `preferredPlaybackRate`. Uses `playImmediately(atRate:)` when buffer
+    /// is already available so AVPlayer does not wait to refill an oversized forward buffer.
+    private func resumePlayback(forceImmediate: Bool = false) {
+        guard let player, let item = player.currentItem else { return }
+        let rate = preferredPlaybackRate > 0 ? preferredPlaybackRate : 1.0
+        userIntendsToPlay = true
+
+        let bufferReady = item.isPlaybackLikelyToKeepUp || hasAdequateBufferAhead()
+        if forceImmediate || bufferReady {
+            player.playImmediately(atRate: rate)
+        } else {
+            player.play()
+            if abs(player.rate - rate) > 0.001 {
+                player.rate = rate
+            }
+        }
+        showBarAndResetTimer()
+        updateIndicator()
+    }
+
+    /// Unsticks playback when the user wants to play but AVPlayer is waiting despite loaded data.
+    private func tryResumeIfStalled() {
+        guard userIntendsToPlay, !isStallRecoveryInFlight, let player else { return }
+        guard player.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
+        guard let item = player.currentItem else { return }
+        guard item.isPlaybackLikelyToKeepUp || hasAdequateBufferAhead() else { return }
+
         let now = Date()
-        guard let at = lastBufferedRangeAt else {
+        if let last = lastStallRecoveryAt,
+           now.timeIntervalSince(last) < TransportBarMetrics.stallRecoveryCooldown {
+            return
+        }
+
+        lastStallRecoveryAt = now
+        isStallRecoveryInFlight = true
+        resumePlayback(forceImmediate: true)
+        isStallRecoveryInFlight = false
+    }
+
+    private func pausePlayback() {
+        userIntendsToPlay = false
+        player?.pause()
+        showBarAndResetTimer()
+        updateIndicator()
+    }
+
+    private func updateDownloadThroughput() {
+        guard let player, let item = player.currentItem else {
+            rootView.barView.updateDownloadSpeedDisplay(.idle)
+            return
+        }
+
+        let now = Date()
+        if let lastSampleAt = lastThroughputSampleAt {
+            let elapsed = now.timeIntervalSince(lastSampleAt)
+            if elapsed >= TransportBarMetrics.throughputSampleInterval {
+                lastThroughputSampleAt = now
+
+                var sampleBps: Double?
+                let accessLogBytes = Self.cumulativeAccessLogBytes(for: item)
+                let accessLogDelta = accessLogBytes - lastAccessLogBytes
+                lastAccessLogBytes = accessLogBytes
+                if accessLogDelta > 0 {
+                    sampleBps = Double(accessLogDelta) / elapsed
+                }
+
+                if sampleBps == nil {
+                    if let bufferSampleAt = lastBufferedRangeAt {
+                        let bufferElapsed = now.timeIntervalSince(bufferSampleAt)
+                        if bufferElapsed >= TransportBarMetrics.throughputSampleInterval {
+                            let bufferDelta = cachedBufferedEnd - lastBufferedRangeEnd
+                            lastBufferedRangeAt = now
+                            lastBufferedRangeEnd = cachedBufferedEnd
+                            if bufferDelta > 0, bufferElapsed > 0 {
+                                let bitrate = Self.observedVariantBitrate(from: item)
+                                sampleBps = (bufferDelta / bufferElapsed) * (bitrate / 8.0)
+                            }
+                        }
+                    } else {
+                        lastBufferedRangeAt = now
+                        lastBufferedRangeEnd = cachedBufferedEnd
+                    }
+                } else {
+                    lastBufferedRangeAt = now
+                    lastBufferedRangeEnd = cachedBufferedEnd
+                }
+
+                ingestThroughputSample(sampleBps, at: now)
+            }
+        } else {
+            lastThroughputSampleAt = now
+            lastAccessLogBytes = Self.cumulativeAccessLogBytes(for: item)
             lastBufferedRangeAt = now
-            lastBufferedRangeEnd = end
-            return
-        }
-        let elapsed = now.timeIntervalSince(at)
-        guard elapsed >= 0.35 else { return }
-
-        let delta = end - lastBufferedRangeEnd
-        lastBufferedRangeAt = now
-        lastBufferedRangeEnd = end
-
-        guard delta > 0 else {
-            rootView.barView.updateDownloadSpeed(nil)
-            return
+            lastBufferedRangeEnd = cachedBufferedEnd
         }
 
-        // Rough baseline: 8 Mbps ~= 1 MB/s media bitrate.
-        // If buffer grows by N seconds per second, network throughput is roughly N MB/s.
-        let bytesPerSecond = (delta / elapsed) * 1_000_000
-        recentDownloadSpeedSamples.append(bytesPerSecond)
-        if recentDownloadSpeedSamples.count > 4 {
-            recentDownloadSpeedSamples.removeFirst()
+        rootView.barView.updateDownloadSpeedDisplay(
+            Self.throughputDisplay(
+                player: player,
+                bufferedEnd: cachedBufferedEnd,
+                smoothedSpeed: smoothedThroughput(),
+                lastPositiveTransferAt: lastPositiveThroughputAt
+            )
+        )
+    }
+
+    private func ingestThroughputSample(_ bytesPerSecond: Double?, at now: Date) {
+        guard let bytesPerSecond, bytesPerSecond > 0 else { return }
+
+        lastPositiveThroughputAt = now
+        recentThroughputSamples.append(bytesPerSecond)
+        if recentThroughputSamples.count > TransportBarMetrics.throughputSmoothingSamples {
+            recentThroughputSamples.removeFirst()
         }
-        let avg = recentDownloadSpeedSamples.reduce(0, +) / Double(recentDownloadSpeedSamples.count)
-        rootView.barView.updateDownloadSpeed(avg)
+
+        let alpha = 2.0 / (Double(TransportBarMetrics.throughputSmoothingSamples) + 1.0)
+        if let ema = throughputEMA {
+            throughputEMA = ema + alpha * (bytesPerSecond - ema)
+        } else {
+            throughputEMA = bytesPerSecond
+        }
+    }
+
+    private func smoothedThroughput() -> Double? {
+        let rollingAverage: Double? = {
+            guard !recentThroughputSamples.isEmpty else { return nil }
+            return recentThroughputSamples.reduce(0, +) / Double(recentThroughputSamples.count)
+        }()
+
+        switch (throughputEMA, rollingAverage) {
+        case let (ema?, rolling?):
+            return (ema + rolling) / 2.0
+        case let (ema?, nil):
+            return ema
+        case let (nil, rolling?):
+            return rolling
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    private static func cumulativeAccessLogBytes(for item: AVPlayerItem) -> Int64 {
+        guard let events = item.accessLog()?.events else { return 0 }
+        return events.reduce(Int64(0)) { partial, event in
+            partial + event.numberOfBytesTransferred
+        }
+    }
+
+    private static func observedVariantBitrate(from item: AVPlayerItem) -> Double {
+        guard let event = item.accessLog()?.events.last else {
+            return TransportBarMetrics.throughputFallbackBitrate
+        }
+        if event.observedBitrate > 0 { return event.observedBitrate }
+        if event.indicatedBitrate > 0 { return event.indicatedBitrate }
+        let mediaBitrate = event.averageVideoBitrate + event.averageAudioBitrate
+        if mediaBitrate > 0 { return mediaBitrate }
+        return TransportBarMetrics.throughputFallbackBitrate
+    }
+
+    private static func throughputDisplay(
+        player: AVPlayer,
+        bufferedEnd: TimeInterval,
+        smoothedSpeed: Double?,
+        lastPositiveTransferAt: Date?
+    ) -> DownloadThroughputDisplay {
+        let currentTime = CMTimeGetSeconds(player.currentTime())
+        let playhead = currentTime.isFinite ? currentTime : 0
+        let bufferAhead = max(0, bufferedEnd - playhead)
+        let isWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+        let speed = smoothedSpeed
+        let isActivelyTransferring = speed.map { $0 >= TransportBarMetrics.throughputIdleBytesPerSecond } ?? false
+        let recentlyTransferred = lastPositiveTransferAt.map {
+            Date().timeIntervalSince($0) < TransportBarMetrics.throughputSampleInterval * 3
+        } ?? false
+
+        if isWaiting || bufferAhead < TransportBarMetrics.throughputLowBufferSeconds {
+            return .buffering(speed: speed)
+        }
+
+        if isActivelyTransferring && recentlyTransferred, let speed {
+            return .downloading(speed: speed)
+        }
+
+        if bufferAhead >= TransportBarMetrics.throughputSteadyBufferSeconds {
+            return .steady(speed: speed)
+        }
+
+        if isActivelyTransferring, let speed {
+            return .downloading(speed: speed)
+        }
+
+        return .buffering(speed: speed)
     }
 
     private func updateHiddenForLiveIfNeeded() {
@@ -1575,14 +1831,13 @@ final class TransportBarController: NSObject {
                 if finished {
                     self.applyFinalSeek(target: target)
                     self.pendingScrubCommit = false
-                    self.player?.play()
-                    self.showBarAndResetTimer()
+                    self.resumePlayback(forceImmediate: self.hasAdequateBufferAhead())
                 } else if attempt < 3 {
                     self.commitVisualScrubRetry(target: target, attempt: attempt + 1)
                 } else {
                     self.pendingScrubCommit = false
                     self.finalizeSeekExitUI()
-                    self.player?.play()
+                    self.resumePlayback(forceImmediate: self.hasAdequateBufferAhead())
                 }
             }
         }
@@ -1656,6 +1911,7 @@ final class TransportBarController: NSObject {
     private func enterSkim(direction: Int) {
         guard let player else { return }
         wasPlayingBeforeSkim = (player.timeControlStatus == .playing || player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
+        userIntendsToPlay = wasPlayingBeforeSkim
         player.pause()
         skimPhase = .skimming(direction: direction, stage: 1)
         let cur = CMTimeGetSeconds(player.currentTime())
@@ -1739,7 +1995,7 @@ final class TransportBarController: NSObject {
                 guard let self else { return }
                 if finished {
                     self.applyFinalSeek(target: target)
-                    if resume { self.player?.play() }
+                    if resume { self.resumePlayback(forceImmediate: self.hasAdequateBufferAhead()) }
                     self.updateIndicator()
                     self.showBarAndResetTimer()
                 } else if attempt < 3 {
@@ -1749,7 +2005,7 @@ final class TransportBarController: NSObject {
                     // Give up gracefully: clear UI and start playback wherever the player ended up
                     // so we don't lock the user in a preview state forever.
                     self.finalizeSeekExitUI()
-                    if resume { self.player?.play() }
+                    if resume { self.resumePlayback(forceImmediate: self.hasAdequateBufferAhead()) }
                 }
             }
         }
@@ -1797,12 +2053,16 @@ final class TransportBarController: NSObject {
 
     private func togglePlayPause() {
         guard let player else { return }
-        if player.timeControlStatus == .playing {
-            player.pause()
-        } else {
-            player.play()
+        switch player.timeControlStatus {
+        case .playing:
+            pausePlayback()
+        case .paused:
+            resumePlayback(forceImmediate: hasAdequateBufferAhead())
+        case .waitingToPlayAtSpecifiedRate:
+            resumePlayback(forceImmediate: hasAdequateBufferAhead())
+        @unknown default:
+            resumePlayback(forceImmediate: hasAdequateBufferAhead())
         }
-        showBarAndResetTimer()
     }
 
     private func seekBy(seconds: Double) {
@@ -2005,14 +2265,14 @@ final class TransportBarController: NSObject {
         if pendingScrubCommit, let target = rootView.barView.trackControl.scrubPreviewTime {
             commitVisualScrubSeek(to: target); return .success
         }
-        player?.play(); showBarAndResetTimer(); return .success
+        resumePlayback(forceImmediate: hasAdequateBufferAhead()); return .success
     }
     @objc private func mpPause(_ e: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
         if case .skimming = skimPhase { exitSkim(); return .success }
         if pendingScrubCommit, let target = rootView.barView.trackControl.scrubPreviewTime {
             commitVisualScrubSeek(to: target); return .success
         }
-        player?.pause(); showBarAndResetTimer(); return .success
+        pausePlayback(); return .success
     }
 }
 
