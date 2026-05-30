@@ -25,6 +25,10 @@ final class AddAccountFlowModel: ObservableObject, AccountLoginHost {
         apiClient.baseURL = nil
     }
 
+    func addAccountConflictMessage(baseURL: URL, username: String) -> String? {
+        session?.addAccountConflictMessage(baseURL: baseURL, username: username)
+    }
+
     func didLogin(tokens: OAuthTokenResponse, username: String) {
         guard let baseURL, let session else { return }
         session.completeAddAccount(baseURL: baseURL, tokens: tokens, typedUsername: username)
@@ -44,9 +48,13 @@ struct AddAccountFlowView: View {
             VStack(spacing: 0) {
                 Group {
                     if !showLogin {
-                        InstanceSetupScreen(host: flow, onInstanceReady: { showLogin = true })
+                        InstanceSetupScreen(
+                            host: flow,
+                            onInstanceReady: { showLogin = true },
+                            showsAnonymousEntry: false
+                        )
                     } else {
-                        LoginScreen(host: flow)
+                        LoginScreen(host: flow, showsAnonymousEntry: false)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

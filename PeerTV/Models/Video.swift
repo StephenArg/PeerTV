@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 struct Video: Decodable, Identifiable, Hashable {
@@ -124,6 +125,197 @@ struct Video: Decodable, Identifiable, Hashable {
         lhs.stableId == rhs.stableId
     }
 
+    /// Snapshot for anonymous history: rewrite thumbnail/preview/avatar paths to absolute URLs.
+    func withHistoryImageURLs(mediaHost: String?, indexHost: String?, instanceBase: URL?) -> Video {
+        func absolutePath(_ path: String?) -> String? {
+            guard let path else { return nil }
+            let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+                return trimmed
+            }
+
+            var hostPairs: [(federated: String?, cache: String?)] = []
+            if let mediaHost, let indexHost, mediaHost.lowercased() != indexHost.lowercased() {
+                hostPairs.append((indexHost, mediaHost))
+            }
+            if let mediaHost { hostPairs.append((mediaHost, mediaHost)) }
+            if let indexHost { hostPairs.append((indexHost, indexHost)) }
+
+            for pair in hostPairs {
+                if let resolved = PeerTubeAssetURL.resolve(
+                    path: trimmed,
+                    instanceBase: instanceBase,
+                    federatedHost: pair.federated,
+                    cacheHost: pair.cache
+                )?.absoluteString {
+                    return resolved
+                }
+            }
+            return trimmed
+        }
+
+        let resolvedAvatars: [ActorImage]? = {
+            guard let avatars = channel?.avatars, !avatars.isEmpty else { return channel?.avatars }
+            return avatars.map { image in
+                let resolved = resolveAvatarURL(
+                    image,
+                    mediaHost: mediaHost,
+                    indexHost: indexHost,
+                    instanceBase: instanceBase
+                )
+                return ActorImage(
+                    width: image.width,
+                    height: image.height,
+                    path: image.path,
+                    fileUrl: resolved ?? image.fileUrl,
+                    createdAt: image.createdAt,
+                    updatedAt: image.updatedAt
+                )
+            }
+        }()
+
+        let updatedChannel: VideoChannelSummary? = {
+            guard let channel else { return nil }
+            return VideoChannelSummary(
+                id: channel.id,
+                name: channel.name,
+                displayName: channel.displayName,
+                url: channel.url,
+                host: mediaHost ?? channel.host,
+                avatars: resolvedAvatars
+            )
+        }()
+
+        return Video(
+            id: id,
+            uuid: uuid,
+            name: name,
+            description: description,
+            duration: duration,
+            views: views,
+            likes: likes,
+            dislikes: dislikes,
+            createdAt: createdAt,
+            publishedAt: publishedAt,
+            thumbnailPath: absolutePath(thumbnailPath),
+            previewPath: absolutePath(previewPath),
+            embedPath: embedPath,
+            channel: updatedChannel,
+            account: account,
+            privacy: privacy,
+            streamingPlaylists: streamingPlaylists,
+            files: files,
+            commentReadHost: indexHost ?? commentReadHost
+        )
+    }
+
+    /// Preserves federated index host after API decode (decoder clears `commentReadHost`).
+    func withCommentReadHost(_ host: String?) -> Video {
+        let trimmed = host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return self }
+        return Video(
+            id: id,
+            uuid: uuid,
+            name: name,
+            description: description,
+            duration: duration,
+            views: views,
+            likes: likes,
+            dislikes: dislikes,
+            createdAt: createdAt,
+            publishedAt: publishedAt,
+            thumbnailPath: thumbnailPath,
+            previewPath: previewPath,
+            embedPath: embedPath,
+            channel: channel,
+            account: account,
+            privacy: privacy,
+            streamingPlaylists: streamingPlaylists,
+            files: files,
+            commentReadHost: trimmed
+        )
+    }
+
+    /// Applies pre-resolved absolute URLs from anonymous history storage for grid display.
+    func withDisplayImageLinks(_ links: AnonymousHistoryImageLinks) -> Video {
+        let thumb = links.thumbnailURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let preview = links.previewURL?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var updatedChannel = channel
+        if let avatar = links.channelAvatarURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !avatar.isEmpty,
+           let ch = channel {
+            let avatarImage = ActorImage(
+                width: nil,
+                height: nil,
+                path: nil,
+                fileUrl: avatar,
+                createdAt: nil,
+                updatedAt: nil
+            )
+            updatedChannel = VideoChannelSummary(
+                id: ch.id,
+                name: ch.name,
+                displayName: ch.displayName,
+                url: ch.url,
+                host: ch.host,
+                avatars: [avatarImage]
+            )
+        }
+
+        return Video(
+            id: id,
+            uuid: uuid,
+            name: name,
+            description: description,
+            duration: duration,
+            views: views,
+            likes: likes,
+            dislikes: dislikes,
+            createdAt: createdAt,
+            publishedAt: publishedAt,
+            thumbnailPath: thumb.flatMap { $0.isEmpty ? nil : $0 } ?? thumbnailPath,
+            previewPath: preview.flatMap { $0.isEmpty ? nil : $0 } ?? previewPath,
+            embedPath: embedPath,
+            channel: updatedChannel,
+            account: account,
+            privacy: privacy,
+            streamingPlaylists: streamingPlaylists,
+            files: files,
+            commentReadHost: commentReadHost
+        )
+    }
+
+    private func resolveAvatarURL(
+        _ image: ActorImage,
+        mediaHost: String?,
+        indexHost: String?,
+        instanceBase: URL?
+    ) -> String? {
+        if let fileUrl = image.fileUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fileUrl.isEmpty,
+           fileUrl.hasPrefix("http://") || fileUrl.hasPrefix("https://") {
+            return fileUrl
+        }
+        if let mediaHost, let indexHost {
+            if let url = PeerTubeAssetURL.resolve(
+                avatars: [image],
+                instanceBase: instanceBase,
+                federatedHost: indexHost,
+                cacheHost: mediaHost
+            )?.absoluteString {
+                return url
+            }
+        }
+        return PeerTubeAssetURL.resolve(
+            avatars: [image],
+            instanceBase: instanceBase,
+            federatedHost: mediaHost ?? indexHost,
+            cacheHost: mediaHost
+        )?.absoluteString
+    }
+
     /// Fills in channel avatars (e.g. after loading plugin random-video rows that omit them).
     func withChannelAvatars(_ avatars: [ActorImage]) -> Video {
         let ch = channel
@@ -248,6 +440,7 @@ struct Video: Decodable, Identifiable, Hashable {
         if let hlsFiles = streamingPlaylists?.first?.files {
             for file in hlsFiles {
                 guard let resId = file.resolution?.id,
+                      resId != Self.audioOnlyHLSResolutionId,
                       let label = file.resolution?.label,
                       let urlStr = file.playlistUrl ?? file.fileUrl,
                       let url = URL(string: urlStr) else { continue }
@@ -267,6 +460,9 @@ struct Video: Decodable, Identifiable, Hashable {
 
         return options.sorted { ($0.resolutionId) > ($1.resolutionId) }
     }
+
+    /// PeerTube HLS: resolution `0` is audio-only; it must not be used as a video quality option.
+    static let audioOnlyHLSResolutionId = 0
 }
 
 struct ResolutionOption: Identifiable {
@@ -274,6 +470,36 @@ struct ResolutionOption: Identifiable {
     let label: String
     let url: URL
     var id: Int { resolutionId }
+}
+
+extension ResolutionOption {
+    /// Hint for AVPlayer when playing the HLS master playlist (keeps the separate audio rendition).
+    var preferredMaximumResolution: CGSize {
+        Self.maximumResolutionSize(forId: resolutionId)
+    }
+
+    static func maximumResolutionSize(forId id: Int) -> CGSize {
+        switch id {
+        case 240: return CGSize(width: 426, height: 240)
+        case 360: return CGSize(width: 640, height: 360)
+        case 480: return CGSize(width: 854, height: 480)
+        case 720: return CGSize(width: 1280, height: 720)
+        case 1080: return CGSize(width: 1920, height: 1080)
+        case 1440: return CGSize(width: 2560, height: 1440)
+        case 2160: return CGSize(width: 3840, height: 2160)
+        default: return CGSize(width: 1920, height: 1080)
+        }
+    }
+}
+
+enum HLSPlaybackPreferences {
+    static func applyPreferredMaximumResolution(_ size: CGSize?, to item: AVPlayerItem) {
+        if let size, size.width > 0, size.height > 0 {
+            item.preferredMaximumResolution = size
+        } else {
+            item.preferredMaximumResolution = .zero
+        }
+    }
 }
 
 struct StreamingPlaylist: Decodable {
@@ -324,6 +550,22 @@ struct ActorImage: Decodable {
     let fileUrl: String?
     let createdAt: String?
     let updatedAt: String?
+
+    init(
+        width: Int?,
+        height: Int?,
+        path: String?,
+        fileUrl: String?,
+        createdAt: String?,
+        updatedAt: String?
+    ) {
+        self.width = width
+        self.height = height
+        self.path = path
+        self.fileUrl = fileUrl
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
 }
 
 struct VideoPrivacy: Decodable {

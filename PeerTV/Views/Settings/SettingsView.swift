@@ -22,23 +22,25 @@ struct SettingsView: View {
                     .font(.title3)
                     .bold()
 
-                settingsSection(title: "Downloads") {
-                    NavigationLink {
-                        DownloadedVideosView()
-                    } label: {
-                        HStack {
-                            Text("Downloaded Videos")
-                            Spacer()
-                            Text("\(DownloadManager.shared.downloadedVideos.count) videos")
-                                .foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right")
-                                .foregroundStyle(.secondary)
+                if !session.isAnonymous {
+                    settingsSection(title: "Downloads") {
+                        NavigationLink {
+                            DownloadedVideosView()
+                        } label: {
+                            HStack {
+                                Text("Downloaded Videos")
+                                Spacer()
+                                Text("\(DownloadManager.shared.downloadedVideos.count) videos")
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 16)
+                            .padding(.horizontal, 20)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .padding(.vertical, 16)
-                        .padding(.horizontal, 20)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .buttonStyle(.card)
                     }
-                    .buttonStyle(.card)
                 }
 
                 settingsSection(title: "Playback") {
@@ -72,8 +74,12 @@ struct SettingsView: View {
                 }
 
                 settingsSection(title: "Accounts") {
-                    ForEach(session.sortedAccounts) { account in
-                        accountRow(account)
+                    if session.isAnonymous {
+                        anonymousAccountsSection
+                    } else {
+                        ForEach(session.sortedAccounts) { account in
+                            accountRow(account)
+                        }
                     }
 
                     Button {
@@ -92,7 +98,11 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.card)
                 } footer: {
-                    Text("Select an account to use it for the whole app. Sign out removes saved login for that account only. Player, theme, and other app preferences stay shared.")
+                    if session.isAnonymous {
+                        Text("Sign out ends anonymous browsing and returns to the login screen. Adding an account signs you in and leaves anonymous mode.")
+                    } else {
+                        Text("Select an account to use it for the whole app. Sign out removes saved login for that account only. Player, theme, and other app preferences stay shared.")
+                    }
                 }
 
                 // settingsSection(title: "Appearance") {
@@ -105,7 +115,7 @@ struct SettingsView: View {
                 //     Text("System follows Apple TV settings. Other themes use a dark base with a different accent color.")
                 // }
 
-                if DebugFlags.showAPIExplorer {
+                if !session.isAnonymous, DebugFlags.showAPIExplorer {
                     settingsSection(title: "Developer") {
                         Toggle("Shuffle Tab", isOn: $shuffleEnabled)
                             .onChange(of: shuffleEnabled) { _, newValue in
@@ -158,11 +168,8 @@ struct SettingsView: View {
             .padding(.top, 40)
             .padding(.bottom, 120)
         }
-        .onAppear {
-            showVideoDetailRawJSON = DebugFlags.showVideoDetailRawJSON
-            savedPositionCount = PlaybackPositionStore.savedPositionCount
-            resumePlaybackEnabled = PlaybackPositionStore.isEnabled
-        }
+        .onAppear { refreshPlaybackSettings() }
+        .onChange(of: session.phase) { _, _ in refreshPlaybackSettings() }
         .fullScreenCover(
             isPresented: Binding(
                 get: { session.isAddingAccount },
@@ -201,8 +208,12 @@ struct SettingsView: View {
         }
         .alert("Clear all saved positions?", isPresented: $showClearPositionsAlert) {
             Button("Clear All", role: .destructive) {
-                PlaybackPositionStore.clearAll()
-                savedPositionCount = 0
+                if session.isAnonymous {
+                    PlaybackPositionStore.clearAnonymousPositions()
+                } else {
+                    PlaybackPositionStore.clearAll()
+                }
+                refreshPlaybackSettings()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -210,6 +221,51 @@ struct SettingsView: View {
         }
         .onChange(of: resumePlaybackEnabled) { _, newValue in
             PlaybackPositionStore.isEnabled = newValue
+        }
+    }
+
+    private func refreshPlaybackSettings() {
+        showVideoDetailRawJSON = DebugFlags.showVideoDetailRawJSON
+        resumePlaybackEnabled = PlaybackPositionStore.isEnabled
+        if session.isAnonymous {
+            savedPositionCount = PlaybackPositionStore.savedPositionCount(
+                for: PlaybackPositionStore.anonymousAccountId
+            )
+        } else {
+            savedPositionCount = PlaybackPositionStore.savedPositionCount
+        }
+    }
+
+    private var anonymousAccountsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 20) {
+                Image(systemName: "eye.slash.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 56, height: 56)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Browsing anonymously")
+                        .font(.headline)
+                    Text("Fediverse trending and Sepia Search only")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 16)
+
+                Button {
+                    session.exitAnonymousToLogin()
+                } label: {
+                    Text("Sign Out")
+                        .foregroundStyle(.white)
+                }
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+            )
         }
     }
 

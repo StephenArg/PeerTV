@@ -63,6 +63,7 @@ final class HomeViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var sort: String
     @Published var scope: String
+    @Published private(set) var fediverseLanguageIds: [String] = []
 
     private static let sortDefaultsKey = "PeerTV.homeVideoSort"
     private static let scopeDefaultsKey = "PeerTV.homeVideoScope"
@@ -90,6 +91,11 @@ final class HomeViewModel: ObservableObject {
         } else {
             scope = HomeVideoScope.all.rawValue
         }
+        fediverseLanguageIds = FediverseHotLanguage.loadSavedCodes()
+    }
+
+    var fediverseLanguageButtonTitle: String {
+        fediverseLanguageIds.isEmpty ? "Languages" : "Languages (\(fediverseLanguageIds.count))"
     }
 
     var currentListSort: HomeVideoListSort {
@@ -171,10 +177,30 @@ final class HomeViewModel: ObservableObject {
         await loadInitial()
     }
 
+    func applyFediverseLanguages(_ selection: Set<String>) async {
+        let ordered = FediverseHotLanguage.orderedCodes(from: selection)
+        guard ordered != fediverseLanguageIds else { return }
+        fediverseLanguageIds = ordered
+        FediverseHotLanguage.saveCodes(ordered)
+        guard currentListScope == .fediverseTrending else { return }
+        await loadInitial()
+    }
+
     func applyListScope(_ option: HomeVideoScope) async {
-        guard scope != option.rawValue else { return }
-        scope = option.rawValue
-        UserDefaults.standard.set(option.rawValue, forKey: Self.scopeDefaultsKey)
+        let scopeChanged = scope != option.rawValue
+        if scopeChanged {
+            scope = option.rawValue
+            UserDefaults.standard.set(option.rawValue, forKey: Self.scopeDefaultsKey)
+        }
+        // Scope may already match (e.g. persisted pref) while `videos` is still empty — reload then.
+        if scopeChanged || videos.isEmpty {
+            await loadInitial()
+        }
+    }
+
+    /// Anonymous home is fediverse-trending only; always fetch even when scope was already set in UserDefaults.
+    func loadAnonymousFediverseHome() async {
+        scope = HomeVideoScope.fediverseTrending.rawValue
         await loadInitial()
     }
 
@@ -185,7 +211,7 @@ final class HomeViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
-            let loaded = try await FediverseHotVideosResponse.fetchVideos()
+            let loaded = try await FediverseHotVideosResponse.fetchVideos(languageIds: fediverseLanguageIds)
             videos = loaded
             fediverseHotLoaded = true
             total = loaded.count

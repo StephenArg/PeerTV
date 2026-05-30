@@ -7,6 +7,7 @@ struct VideoDetailView: View {
     @State private var showPlaylistPicker = false
     @State private var descriptionExpanded = false
     @State private var savedPosition: TimeInterval?
+    @State private var showAnonymousRestriction = false
 
     private let originHost: String?
     private let commentReadHost: String?
@@ -36,12 +37,15 @@ struct VideoDetailView: View {
                             // Full preview is one focus target so moving up from the control bar always
                             // lands on play (same width as the row below).
                             Button {
+                                let tileURLs = historyTileURLs(for: video)
                                 PlayerPresenter.shared.play(
                                     videoId: vm.videoId,
                                     apiClient: playbackAPIClient,
                                     accessToken: playbackAccessToken,
                                     apiHosts: vm.usesFederatedOrigin ? federatedAPIHosts : nil,
-                                    accountId: session.activeAccountId
+                                    accountId: session.playbackAccountId,
+                                    historyTileThumbnailURL: tileURLs.thumbnail,
+                                    historyTileChannelAvatarURL: tileURLs.avatar
                                 )
                             } label: {
                                 ZStack {
@@ -75,16 +79,19 @@ struct VideoDetailView: View {
 
                             if resumeAt != nil {
                                 Button {
-                                    if let accountId = session.activeAccountId {
+                                    if let accountId = session.playbackAccountId {
                                         PlaybackPositionStore.remove(videoId: vm.videoId, accountId: accountId)
                                         savedPosition = nil
                                     }
+                                    let tileURLs = historyTileURLs(for: video)
                                     PlayerPresenter.shared.play(
                                         videoId: vm.videoId,
                                         apiClient: playbackAPIClient,
                                         accessToken: playbackAccessToken,
                                         apiHosts: vm.usesFederatedOrigin ? federatedAPIHosts : nil,
-                                        accountId: session.activeAccountId
+                                        accountId: session.playbackAccountId,
+                                        historyTileThumbnailURL: tileURLs.thumbnail,
+                                        historyTileChannelAvatarURL: tileURLs.avatar
                                     )
                                 } label: {
                                     HStack(spacing: 10) {
@@ -98,16 +105,23 @@ struct VideoDetailView: View {
                                 .buttonStyle(.card)
                             }
 
-                            if session.tokenStore.accessToken != nil {
+                            if showsAccountActions {
                                 controlBar(video: video)
                             }
 
-                            VideoDownloadBar(video: video)
+                            VideoDownloadBar(
+                                video: video,
+                                onAnonymousRestricted: { showAnonymousRestriction = true }
+                            )
 
                             Divider()
                                 .padding(.top, 8)
 
-                            VideoCommentsSection(vm: vm)
+                            VideoCommentsSection(
+                                vm: vm,
+                                postingBlocked: session.isAnonymous,
+                                onPostingBlocked: { showAnonymousRestriction = true }
+                            )
                         }
                         .frame(maxWidth: .infinity)
                         .focusSection()
@@ -242,7 +256,7 @@ struct VideoDetailView: View {
                 commentReadHost: commentReadHost,
                 additionalCommentClients: additionalCommentClients,
                 accountName: federated ? nil : (session.username.isEmpty ? nil : session.username),
-                canPostComments: session.tokenStore.accessToken != nil
+                canPostComments: session.isAnonymous || session.tokenStore.accessToken != nil
             )
             refreshSavedPosition()
             await vm.load()
@@ -262,9 +276,24 @@ struct VideoDetailView: View {
                 }
             }
         }
+        .anonymousRestrictionAlert(isPresented: $showAnonymousRestriction) {
+            session.exitAnonymousToLogin()
+        }
     }
 
     // MARK: - Helpers
+
+    private var showsAccountActions: Bool {
+        session.isAnonymous || session.tokenStore.accessToken != nil
+    }
+
+    private func guardAuthenticatedAction(_ action: () -> Void) {
+        if session.isAnonymous {
+            showAnonymousRestriction = true
+        } else {
+            action()
+        }
+    }
 
     private var detailAPIClient: PeerTubeAPIClient {
         if let first = federatedAPIHosts.first {
@@ -301,6 +330,14 @@ struct VideoDetailView: View {
         )
     }
 
+    /// Preview URLs currently shown on the detail screen (for anonymous history capture).
+    private func historyTileURLs(for video: Video) -> (thumbnail: URL?, avatar: URL?) {
+        (
+            detailAssetURL(path: video.previewPath ?? video.thumbnailPath),
+            detailAvatarURL(for: video)
+        )
+    }
+
     private func detailAvatarURL(for video: Video) -> URL? {
         let assetCacheHost: String? = {
             if vm.usesFederatedOrigin {
@@ -317,7 +354,7 @@ struct VideoDetailView: View {
     }
 
     private func refreshSavedPosition() {
-        if let accountId = session.activeAccountId {
+        if let accountId = session.playbackAccountId {
             savedPosition = PlaybackPositionStore.position(for: vm.videoId, accountId: accountId)
         } else {
             savedPosition = nil
@@ -339,7 +376,7 @@ struct VideoDetailView: View {
     private func controlBar(video: Video) -> some View {
         HStack(spacing: 32) {
             Button {
-                Task { await vm.toggleLike() }
+                guardAuthenticatedAction { Task { await vm.toggleLike() } }
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: vm.userRating == "like" ? "hand.thumbsup.fill" : "hand.thumbsup")
@@ -358,7 +395,7 @@ struct VideoDetailView: View {
             .frame(maxWidth: .infinity)
 
             Button {
-                Task { await vm.toggleDislike() }
+                guardAuthenticatedAction { Task { await vm.toggleDislike() } }
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: vm.userRating == "dislike" ? "hand.thumbsdown.fill" : "hand.thumbsdown")
@@ -377,8 +414,10 @@ struct VideoDetailView: View {
             .frame(maxWidth: .infinity)
 
             Button {
-                Task { await vm.loadMyPlaylists() }
-                showPlaylistPicker = true
+                guardAuthenticatedAction {
+                    Task { await vm.loadMyPlaylists() }
+                    showPlaylistPicker = true
+                }
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "text.badge.plus")

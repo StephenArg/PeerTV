@@ -11,7 +11,7 @@ struct RootView: View {
                 InstanceSetupView()
             case .needsLogin:
                 LoginView()
-            case .authenticated:
+            case .anonymous, .authenticated:
                 MainTabView()
                     .id(session.mainTabViewIdentity)
             }

@@ -41,10 +41,20 @@ final class PlayerPresenter {
         accessToken: String?,
         apiHosts: [String]? = nil,
         accountId: UUID? = nil,
-        playlistQueue: PlaylistPlaybackQueue? = nil
+        playlistQueue: PlaylistPlaybackQueue? = nil,
+        historyTileThumbnailURL: URL? = nil,
+        historyTileChannelAvatarURL: URL? = nil
     ) {
         guard !isPresenting else { return }
         isPresenting = true
+
+        if AnonymousHistoryStore.shared.isActive {
+            AnonymousHistoryStore.shared.stageTileSnapshot(
+                videoId: videoId,
+                thumbnailURL: historyTileThumbnailURL,
+                channelAvatarURL: historyTileChannelAvatarURL
+            )
+        }
 
         guard let window = Self.keyWindow else {
             PlaybackLog.log.error("play aborted: no key window videoId=\(videoId, privacy: .public)")
@@ -97,6 +107,13 @@ final class PlayerPresenter {
                 decoder.dateDecodingStrategy = .iso8601
                 let video = try decoder.decode(Video.self, from: data)
 
+                if AnonymousHistoryStore.shared.isActive {
+                    AnonymousHistoryStore.shared.record(
+                        video: video,
+                        apiHosts: apiHosts ?? []
+                    )
+                }
+
                 guard let url = video.hlsPlaylistURL ?? video.playbackURL else {
                     PlaybackLog.log.error("no playback URL videoId=\(videoId, privacy: .public) \(video.playbackSourceSummary, privacy: .public)")
                     removeLoadingOverlay()
@@ -128,24 +145,12 @@ final class PlayerPresenter {
                     masterURL: playURL,
                     defaultResolution: PlayerSettings.defaultResolution
                 )
-                // Inject HLS token on the chosen variant URL too (the master URL was already
-                // token-injected above, but a resolution-specific `.m3u8` needs its own query).
-                let startURL: URL
-                if pick.url == playURL {
-                    startURL = pick.url
-                } else {
-                    startURL = await Self.urlWithHLSTokenIfNeeded(
-                        url: pick.url,
-                        videoId: videoId,
-                        apiClient: resolvedClient,
-                        accessToken: accessToken
-                    )
-                }
 
                 presentPlayer(
-                    url: startURL,
+                    url: playURL,
                     autoURL: playURL,
                     initialLabel: pick.label,
+                    preferredMaximumResolution: pick.preferredMaximumResolution,
                     resolutions: resolutionOptions,
                     accessToken: accessToken,
                     videoId: videoId,
@@ -229,33 +234,36 @@ final class PlayerPresenter {
         top.present(alert, animated: true)
     }
 
-    /// Chooses which URL the player should start from, based on the user's default-resolution
-    /// setting. Returns both the URL to play *and* the Quality menu label that matches it.
+    /// Chooses startup URL and quality label from the user's default-resolution setting.
     ///
-    /// - Exact match on the requested resolution → use that variant.
-    /// - No exact match → next lower resolution available ("play the next largest quality").
-    /// - No lower resolution either → fall back to Auto (the master playlist).
+    /// For HLS (`masterURL` is `.m3u8`), always returns the **master** playlist URL. PeerTube
+    /// per-resolution `playlistUrl` values are often video-only; audio is linked from the master.
+    /// `preferredMaximumResolution` steers AVPlayer to the intended rung without dropping audio.
     ///
-    /// For local downloads and non-HLS / non-variant sources the fallback is the passed-in
-    /// `masterURL` unchanged, with the `"Auto"` label.
+    /// For progressive (non-HLS) files, returns the matching file URL directly.
     static func chooseInitialPlayback(
         resolutions: [ResolutionOption],
         masterURL: URL,
         defaultResolution: DefaultResolution
-    ) -> (url: URL, label: String) {
-        guard defaultResolution != .auto else { return (masterURL, "Auto") }
+    ) -> (url: URL, label: String, preferredMaximumResolution: CGSize?) {
+        let isHLSMaster = masterURL.pathExtension.lowercased() == "m3u8"
+        guard defaultResolution != .auto else {
+            return (masterURL, "Auto", nil)
+        }
         let target = defaultResolution.rawValue
-        if let exact = resolutions.first(where: { $0.resolutionId == target }) {
-            return (exact.url, exact.label)
+        let picked: ResolutionOption? = {
+            if let exact = resolutions.first(where: { $0.resolutionId == target }) {
+                return exact
+            }
+            return resolutions
+                .filter { $0.resolutionId < target }
+                .max(by: { $0.resolutionId < $1.resolutionId })
+        }()
+        guard let picked else { return (masterURL, "Auto", nil) }
+        if isHLSMaster {
+            return (masterURL, picked.label, picked.preferredMaximumResolution)
         }
-        // "Next largest quality" = largest resolution id strictly less than the target.
-        if let nextLower = resolutions
-            .filter({ $0.resolutionId < target })
-            .max(by: { $0.resolutionId < $1.resolutionId })
-        {
-            return (nextLower.url, nextLower.label)
-        }
-        return (masterURL, "Auto")
+        return (picked.url, picked.label, nil)
     }
 
     // MARK: - Player presentation
@@ -264,6 +272,7 @@ final class PlayerPresenter {
         url: URL,
         autoURL: URL,
         initialLabel: String,
+        preferredMaximumResolution: CGSize? = nil,
         resolutions: [ResolutionOption],
         accessToken: String?,
         videoId: String,
@@ -291,6 +300,7 @@ final class PlayerPresenter {
         )
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
+        HLSPlaybackPreferences.applyPreferredMaximumResolution(preferredMaximumResolution, to: item)
 
         let rawSaved: TimeInterval? = {
             guard let accountId else { return nil }
@@ -968,17 +978,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                 masterURL: url,
                 defaultResolution: PlayerSettings.defaultResolution
             )
-            let startURL: URL
-            if pick.url == url {
-                startURL = url
-            } else {
-                startURL = await PlayerPresenter.urlWithHLSTokenIfNeeded(
-                    url: pick.url,
-                    videoId: nextVideoId,
-                    apiClient: nextQueue.apiClient,
-                    accessToken: nextQueue.accessToken
-                )
-            }
+            let startURL = url
             currentLabel = pick.label
             title = video.name ?? ""
             transportBar?.setTitle(title)
@@ -994,6 +994,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             )
             let newItem = AVPlayerItem(asset: asset)
             newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
+            HLSPlaybackPreferences.applyPreferredMaximumResolution(pick.preferredMaximumResolution, to: newItem)
 
             if let obs = progressTimeObserver, let p = self.player {
                 p.removeTimeObserver(obs)
@@ -1113,6 +1114,12 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     func performDismissCleanup() {
         guard !didCallDismiss else { return }
         didCallDismiss = true
+        let dismissedVideoId = videoId
+        Task { @MainActor in
+            if AnonymousHistoryStore.shared.isActive {
+                AnonymousHistoryStore.shared.finalizeTileSnapshot(for: dismissedVideoId)
+            }
+        }
         reportCurrentTime()
         savePlaybackPosition()
         player?.pause()
@@ -1184,8 +1191,10 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
         let seekTime = player.currentTime()
         let targetSpeed = currentSpeed
-        let targetURL = option?.url ?? autoURL
+        let isHLSMaster = autoURL.pathExtension.lowercased() == "m3u8"
+        let targetURL = (isHLSMaster || option == nil) ? autoURL : (option?.url ?? autoURL)
         let label = option?.label ?? "Auto"
+        let maxResolution: CGSize? = isHLSMaster ? option?.preferredMaximumResolution : nil
         let ext = targetURL.pathExtension.lowercased()
 
         currentLabel = label
@@ -1212,6 +1221,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                 )
                 self.performAssetSwap(
                     asset: asset, seekTime: seekTime, targetSpeed: targetSpeed,
+                    preferredMaximumResolution: maxResolution,
                     controller: controller
                 )
             }
@@ -1223,6 +1233,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             )
             performAssetSwap(
                 asset: asset, seekTime: seekTime, targetSpeed: targetSpeed,
+                preferredMaximumResolution: maxResolution,
                 controller: controller
             )
         }
@@ -1230,6 +1241,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
     private func performAssetSwap(
         asset: AVURLAsset, seekTime: CMTime, targetSpeed: Float,
+        preferredMaximumResolution: CGSize? = nil,
         controller: AVPlayerViewController
     ) {
         initialLoadObservation?.invalidate()
@@ -1239,6 +1251,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         let tolerance = CMTime(seconds: 5, preferredTimescale: 600)
 
         let newItem = AVPlayerItem(asset: asset)
+        HLSPlaybackPreferences.applyPreferredMaximumResolution(preferredMaximumResolution, to: newItem)
         // Mid-stream resolution switches prefer a *small* preroll so playback restarts quickly;
         // the full user-selected buffer cap would force AVFoundation to fetch many minutes of
         // the new target playlist before resuming. Keep a tight 8 s preroll here, then let

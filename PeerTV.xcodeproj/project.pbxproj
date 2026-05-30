@@ -40,6 +40,8 @@
 		A77979121BA1252EDAA0A317 /* InstanceSetupViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26D4C7B759A31AFD03C8FAA7 /* InstanceSetupViewModel.swift */; };
 		AA11223344556677AABB0001 /* RandomVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677AABB0002 /* RandomVideo.swift */; };
 		AA33445566778899BB0001 /* FediverseHotVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA33445566778899BB0002 /* FediverseHotVideo.swift */; };
+		FEDLANGBB000000000000001 /* FediverseHotLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEDLANGAA000000000000001 /* FediverseHotLanguage.swift */; };
+		FEDPICKBB000000000000001 /* FediverseLanguagePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEDPICKAA000000000000001 /* FediverseLanguagePickerView.swift */; };
 		AA22CC33445566778899AA11 /* VideoComment.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22CC33445566778899AA01 /* VideoComment.swift */; };
 		AA22CC33445566778899AA12 /* VideoCommentsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA22CC33445566778899AA02 /* VideoCommentsSection.swift */; };
 		ABF234E54442EF8E170F0FEE /* HistoryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19E305693F9917FF2A4524C6 /* HistoryViewModel.swift */; };
@@ -85,6 +87,12 @@
 		SB33445566778899AABB0001 /* VideoStoryboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = SB33445566778899AABB0002 /* VideoStoryboard.swift */; };
 		VC11223344556677AABB0001 /* VideoCaption.swift in Sources */ = {isa = PBXBuildFile; fileRef = VC11223344556677AABB0002 /* VideoCaption.swift */; };
 		WV11223344556677AABB0001 /* WebVTTParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = WV11223344556677AABB0002 /* WebVTTParser.swift */; };
+		ANONBB00000000000000001 /* AnonymousHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ANONAA00000000000000001 /* AnonymousHistoryStore.swift */; };
+		VIDTILEBB0000000000000001 /* VideoTileImageURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = VIDTILEAA0000000000000001 /* VideoTileImageURL.swift */; };
+		ANONBB00000000000000002 /* AnonymousHistoryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = ANONAA00000000000000002 /* AnonymousHistoryViewModel.swift */; };
+		ANONBB00000000000000003 /* InternetCredentialSaver.swift in Sources */ = {isa = PBXBuildFile; fileRef = ANONAA00000000000000003 /* InternetCredentialSaver.swift */; };
+		ANONBB00000000000000004 /* AnonymousRestrictedAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = ANONAA00000000000000004 /* AnonymousRestrictedAlert.swift */; };
+		ANONBB00000000000000005 /* OnboardingChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = ANONAA00000000000000005 /* OnboardingChrome.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -119,12 +127,20 @@
 		987D5472FE53160F9C48E251 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		AA11223344556677AABB0002 /* RandomVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RandomVideo.swift; sourceTree = "<group>"; };
 		AA33445566778899BB0002 /* FediverseHotVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FediverseHotVideo.swift; sourceTree = "<group>"; };
+		FEDLANGAA000000000000001 /* FediverseHotLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FediverseHotLanguage.swift; sourceTree = "<group>"; };
+		FEDPICKAA000000000000001 /* FediverseLanguagePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FediverseLanguagePickerView.swift; sourceTree = "<group>"; };
 		AA22CC33445566778899AA01 /* VideoComment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoComment.swift; sourceTree = "<group>"; };
 		AA22CC33445566778899AA02 /* VideoCommentsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCommentsSection.swift; sourceTree = "<group>"; };
 		AB9C724F3211B902A59CF5F9 /* InstanceConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstanceConfig.swift; sourceTree = "<group>"; };
 		AC0102030405060708090A01 /* AccountModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountModels.swift; sourceTree = "<group>"; };
 		AC0102030405060708090A02 /* AccountLoginHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountLoginHost.swift; sourceTree = "<group>"; };
 		AC0102030405060708090A03 /* OnboardingFlows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingFlows.swift; sourceTree = "<group>"; };
+		ANONAA00000000000000001 /* AnonymousHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnonymousHistoryStore.swift; sourceTree = "<group>"; };
+		VIDTILEAA0000000000000001 /* VideoTileImageURL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoTileImageURL.swift; sourceTree = "<group>"; };
+		ANONAA00000000000000002 /* AnonymousHistoryViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnonymousHistoryViewModel.swift; sourceTree = "<group>"; };
+		ANONAA00000000000000003 /* InternetCredentialSaver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InternetCredentialSaver.swift; sourceTree = "<group>"; };
+		ANONAA00000000000000004 /* AnonymousRestrictedAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnonymousRestrictedAlert.swift; sourceTree = "<group>"; };
+		ANONAA00000000000000005 /* OnboardingChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingChrome.swift; sourceTree = "<group>"; };
 		AC0102030405060708090A04 /* AddAccountFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddAccountFlowView.swift; sourceTree = "<group>"; };
 		AF82ECF5E9E2749375CC5355 /* SubscriptionsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionsViewModel.swift; sourceTree = "<group>"; };
 		B744C00B446D33F41689EC00 /* Endpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Endpoint.swift; sourceTree = "<group>"; };
@@ -224,6 +240,7 @@
 				EE11223344556677AABB0002 /* ShuffleView.swift */,
 				216F76B265C16AAECE2543BE /* SubscriptionsView.swift */,
 				75E46EDE3001222FB67D18EF /* VideoGridView.swift */,
+				FEDPICKAA000000000000001 /* FediverseLanguagePickerView.swift */,
 			);
 			path = Tabs;
 			sourceTree = "<group>";
@@ -250,9 +267,18 @@
 				AC0102030405060708090A04 /* AddAccountFlowView.swift */,
 				5C503B0BD47FC08E6FB6B653 /* InstanceSetupView.swift */,
 				5CA3EA431DD3E31DF204637D /* LoginView.swift */,
+				ANONAA00000000000000005 /* OnboardingChrome.swift */,
 				AC0102030405060708090A03 /* OnboardingFlows.swift */,
 			);
 			path = Onboarding;
+			sourceTree = "<group>";
+		};
+		ANONGP00000000000000001 /* Anonymous */ = {
+			isa = PBXGroup;
+			children = (
+				ANONAA00000000000000004 /* AnonymousRestrictedAlert.swift */,
+			);
+			path = Anonymous;
 			sourceTree = "<group>";
 		};
 		6A4CD01772248D6F0B04473E /* Player */ = {
@@ -299,6 +325,7 @@
 				1E35934C57A189BB150E61AE /* PaginatedResponse.swift */,
 				AA11223344556677AABB0002 /* RandomVideo.swift */,
 				AA33445566778899BB0002 /* FediverseHotVideo.swift */,
+				FEDLANGAA000000000000001 /* FediverseHotLanguage.swift */,
 				SB33445566778899AABB0002 /* VideoStoryboard.swift */,
 				VC11223344556677AABB0002 /* VideoCaption.swift */,
 				2194DE259D2983B43AF741C1 /* Subscription.swift */,
@@ -315,6 +342,7 @@
 		9A2A754AEFB850701D04FA0B /* ViewModels */ = {
 			isa = PBXGroup;
 			children = (
+				ANONAA00000000000000002 /* AnonymousHistoryViewModel.swift */,
 				9726D998FC8F345F6AE3AABE /* ChannelDetailViewModel.swift */,
 				01C238B0DA6EF91ECC5D526C /* ChannelsViewModel.swift */,
 				19E305693F9917FF2A4524C6 /* HistoryViewModel.swift */,
@@ -354,6 +382,7 @@
 		CD024875B3057A968077CEE8 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				ANONGP00000000000000001 /* Anonymous */,
 				1AB0A27A83F3F7AAA0D011E2 /* Debug */,
 				C08983CFB560E37833650D1D /* Detail */,
 				4A1B60EF512A4EC78C85EBA0 /* Onboarding */,
@@ -375,6 +404,9 @@
 		E31173AD82616B8E70C41238 /* Utilities */ = {
 			isa = PBXGroup;
 			children = (
+				ANONAA00000000000000001 /* AnonymousHistoryStore.swift */,
+				VIDTILEAA0000000000000001 /* VideoTileImageURL.swift */,
+				ANONAA00000000000000003 /* InternetCredentialSaver.swift */,
 				F6BC9C2DE9B71E55CB67457F /* DebugFlags.swift */,
 				309EB2AFB32E2CDFC102EA12 /* ImageCache.swift */,
 				BB445566778899AACC0002 /* HTMLPlainText.swift */,
@@ -483,6 +515,10 @@
 				F712725B1676C6C1998BDEA9 /* ChannelDetailViewModel.swift in Sources */,
 				6722FDD320D96543B183BAE7 /* ChannelsViewModel.swift in Sources */,
 				ABF234E54442EF8E170F0FEE /* HistoryViewModel.swift in Sources */,
+				ANONBB00000000000000002 /* AnonymousHistoryViewModel.swift in Sources */,
+				ANONBB00000000000000001 /* AnonymousHistoryStore.swift in Sources */,
+				VIDTILEBB0000000000000001 /* VideoTileImageURL.swift in Sources */,
+				ANONBB00000000000000003 /* InternetCredentialSaver.swift in Sources */,
 				9276774B3AAB7DE445E77865 /* HomeViewModel.swift in Sources */,
 				A77979121BA1252EDAA0A317 /* InstanceSetupViewModel.swift in Sources */,
 				581BD045062EFBF1B313D28F /* LoginViewModel.swift in Sources */,
@@ -500,6 +536,8 @@
 				048994406577A11E0B516067 /* InstanceSetupView.swift in Sources */,
 				33897146F13A8BB646E04D1F /* LoginView.swift in Sources */,
 				AC0102030405060708090B03 /* OnboardingFlows.swift in Sources */,
+				ANONBB00000000000000005 /* OnboardingChrome.swift in Sources */,
+				ANONBB00000000000000004 /* AnonymousRestrictedAlert.swift in Sources */,
 				AC0102030405060708090B04 /* AddAccountFlowView.swift in Sources */,
 				26F3E2262AB6C7BEBF2CDF21 /* PlayerView.swift in Sources */,
 				DD11223344556677AABB0001 /* PlayerLoaderView.swift in Sources */,
@@ -516,6 +554,8 @@
 				2BBF6DC481B447AC6214EDAC /* VideoGridView.swift in Sources */,
 				AA11223344556677AABB0001 /* RandomVideo.swift in Sources */,
 				AA33445566778899BB0001 /* FediverseHotVideo.swift in Sources */,
+				FEDLANGBB000000000000001 /* FediverseHotLanguage.swift in Sources */,
+				FEDPICKBB000000000000001 /* FediverseLanguagePickerView.swift in Sources */,
 				SB33445566778899AABB0001 /* VideoStoryboard.swift in Sources */,
 				VC11223344556677AABB0001 /* VideoCaption.swift in Sources */,
 				CC11223344556677AABB0001 /* ShuffleViewModel.swift in Sources */,

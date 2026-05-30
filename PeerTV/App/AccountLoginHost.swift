@@ -10,4 +10,10 @@ protocol AccountLoginHost: AnyObject, ObservableObject {
     func setInstance(_ url: URL)
     func didLogin(tokens: OAuthTokenResponse, username: String)
     func clearInstance()
+    /// Non-nil when add-account must not proceed (e.g. username already on this instance).
+    func addAccountConflictMessage(baseURL: URL, username: String) -> String?
+}
+
+extension AccountLoginHost {
+    func addAccountConflictMessage(baseURL: URL, username: String) -> String? { nil }
 }

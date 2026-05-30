@@ -10,6 +10,7 @@ struct VideoGridView: View {
     @State private var showSearch = false
     @State private var showSortDialog = false
     @State private var showScopeDialog = false
+    @State private var showFediverseLanguagePicker = false
     @State private var didLongPress = false
     /// False when another tab is selected so we do not scroll/focus the home grid when the player dismisses from elsewhere.
     @State private var isHomeGridOnScreen = false
@@ -54,7 +55,7 @@ struct VideoGridView: View {
                             }
                             .buttonStyle(.card)
 
-                            if vm.showsSortControls {
+                            if !session.isAnonymous, vm.showsSortControls {
                                 Button {
                                     showSortDialog = true
                                 } label: {
@@ -70,20 +71,39 @@ struct VideoGridView: View {
                                 .buttonStyle(.card)
                             }
 
-                            Button {
-                                showScopeDialog = true
-                            } label: {
-                                HStack(spacing: 20) {
-                                    Image(systemName: "globe")
-                                    Text("Platforms")
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.72)
+                            if !session.isAnonymous {
+                                Button {
+                                    showScopeDialog = true
+                                } label: {
+                                    HStack(spacing: 20) {
+                                        Image(systemName: "globe")
+                                        Text("Platforms")
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.72)
+                                    }
+                                    .font(.callout)
+                                    .padding(.horizontal, 48)
+                                    .padding(.vertical, 12)
                                 }
-                                .font(.callout)
-                                .padding(.horizontal, 48)
-                                .padding(.vertical, 12)
+                                .buttonStyle(.card)
                             }
-                            .buttonStyle(.card)
+
+                            if isFediverseTrending {
+                                Button {
+                                    showFediverseLanguagePicker = true
+                                } label: {
+                                    HStack(spacing: 20) {
+                                        Image(systemName: "character.bubble")
+                                        Text(vm.fediverseLanguageButtonTitle)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.72)
+                                    }
+                                    .font(.callout)
+                                    .padding(.horizontal, 48)
+                                    .padding(.vertical, 12)
+                                }
+                                .buttonStyle(.card)
+                            }
                         }
                         .fixedSize(horizontal: true, vertical: false)
                         .layoutPriority(1)
@@ -94,6 +114,16 @@ struct VideoGridView: View {
                         ForEach(vm.videos, id: \.stableId) { video in
                             Button {
                                 if didLongPress { didLongPress = false; return }
+                                let tileThumb = VideoTileImageURL.thumbnail(
+                                    for: video,
+                                    session: session,
+                                    federatedDisplay: isFediverseTrending
+                                )
+                                let tileAvatar = VideoTileImageURL.channelAvatar(
+                                    for: video,
+                                    session: session,
+                                    federatedDisplay: isFediverseTrending
+                                )
                                 if isFediverseTrending {
                                     let hosts = video.federatedAPIHosts
                                     guard let firstHost = hosts.first else { return }
@@ -102,14 +132,18 @@ struct VideoGridView: View {
                                         apiClient: PeerTubeOriginClients.publicClient(forHost: firstHost),
                                         accessToken: nil,
                                         apiHosts: hosts,
-                                        accountId: session.activeAccountId
+                                        accountId: session.playbackAccountId,
+                                        historyTileThumbnailURL: tileThumb,
+                                        historyTileChannelAvatarURL: tileAvatar
                                     )
                                 } else {
                                     PlayerPresenter.shared.play(
                                         videoId: video.stableId,
                                         apiClient: session.apiClient,
                                         accessToken: session.tokenStore.accessToken,
-                                        accountId: session.activeAccountId
+                                        accountId: session.playbackAccountId,
+                                        historyTileThumbnailURL: tileThumb,
+                                        historyTileChannelAvatarURL: tileAvatar
                                     )
                                 }
                             } label: {
@@ -180,6 +214,11 @@ struct VideoGridView: View {
                 .environmentObject(session)
                 .presentationBackground(.black)
         }
+        .sheet(isPresented: $showFediverseLanguagePicker) {
+            FediverseLanguagePickerView(initialSelection: Set(vm.fediverseLanguageIds)) { selection in
+                Task { await vm.applyFediverseLanguages(selection) }
+            }
+        }
         .confirmationDialog(
             "Sort by",
             isPresented: $showSortDialog,
@@ -212,9 +251,18 @@ struct VideoGridView: View {
                 isAuthenticated: session.phase == .authenticated,
                 includeAllPrivacy: session.useBroadHomeVideoListing
             )
-            await vm.loadInitialIfEmpty()
+            if session.isAnonymous {
+                await vm.loadAnonymousFediverseHome()
+            } else {
+                await vm.loadInitialIfEmpty()
+            }
+        }
+        .onChange(of: session.isAnonymous) { _, anonymous in
+            guard anonymous else { return }
+            Task { await vm.loadAnonymousFediverseHome() }
         }
         .onChange(of: session.useBroadHomeVideoListing) { _, _ in
+            guard !session.isAnonymous else { return }
             vm.configure(
                 apiClient: session.apiClient,
                 isAuthenticated: session.phase == .authenticated,
@@ -232,6 +280,9 @@ struct VideoCardView: View {
     @Environment(\.isFocused) var isFocused
     let video: Video
     var showOriginHost: Bool = false
+    /// When set (e.g. anonymous history), use this URL directly instead of re-resolving paths.
+    var thumbnailURLOverride: URL? = nil
+    var avatarURLOverride: URL? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -295,26 +346,20 @@ struct VideoCardView: View {
     }
 
     private func cardThumbnailURL(path: String?) -> URL? {
-        // Only Sepia Search passes `showOriginHost`; federated thumbnails belong there.
-        // Home and other tabs often list remote videos with `channel.host` set while
-        // relative thumbnail paths are still served from the connected instance.
-        if showOriginHost {
-            return PeerTubeAssetURL.resolve(
-                path: path,
-                instanceBase: session.baseURL,
-                federatedHost: video.originHost,
-                cacheHost: video.commentReadHost
-            )
-        }
-        return session.thumbnailURL(path: path)
+        VideoTileImageURL.thumbnail(
+            for: video,
+            session: session,
+            federatedDisplay: showOriginHost,
+            override: thumbnailURLOverride
+        )
     }
 
     private func cardAvatarURL() -> URL? {
-        PeerTubeAssetURL.resolve(
-            avatars: video.channel?.avatars ?? video.account?.avatars,
-            instanceBase: session.baseURL,
-            federatedHost: video.originHost,
-            cacheHost: showOriginHost ? video.commentReadHost : nil
+        VideoTileImageURL.channelAvatar(
+            for: video,
+            session: session,
+            federatedDisplay: showOriginHost,
+            override: avatarURLOverride
         )
     }
 

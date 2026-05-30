@@ -2,6 +2,7 @@ import SwiftUI
 
 struct VideoDownloadBar: View {
     let video: Video
+    var onAnonymousRestricted: () -> Void = {}
     @EnvironmentObject private var session: SessionStore
     @ObservedObject private var downloadManager = DownloadManager.shared
 
@@ -61,6 +62,10 @@ struct VideoDownloadBar: View {
 
         HStack(spacing: 32) {
             Button {
+                if session.isAnonymous {
+                    onAnonymousRestricted()
+                    return
+                }
                 guard let file else { return }
                 downloadManager.startDownload(
                     video: video,
@@ -83,6 +88,10 @@ struct VideoDownloadBar: View {
             .frame(maxWidth: .infinity)
 
             Button {
+                if session.isAnonymous {
+                    onAnonymousRestricted()
+                    return
+                }
                 showQualityPicker = true
             } label: {
                 HStack(spacing: 10) {

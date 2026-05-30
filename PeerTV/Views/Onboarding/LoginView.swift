@@ -5,26 +5,39 @@ struct LoginView: View {
 
     var body: some View {
         let others = session.otherAccountsWithValidTokens()
-        return VStack(spacing: 24) {
-            LoginScreen(host: session)
+        return VStack(spacing: 0) {
+            LoginScreen(
+                host: session,
+                onBrowseAnonymously: { session.enterAnonymousMode() }
+            )
 
             if !others.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
                     Text("Another saved account")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal, 60)
+
                     ForEach(others) { acc in
                         Button {
                             session.switchAccount(acc.id)
                         } label: {
-                            Text("Continue as \(acc.handle)")
-                                .frame(maxWidth: .infinity)
+                            HStack {
+                                Image(systemName: "person.crop.circle")
+                                Text("Continue as \(acc.handle)")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 18)
+                            .padding(.horizontal, 24)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.card)
+                        .padding(.horizontal, 60)
                     }
                 }
-                .frame(maxWidth: 600)
-                .padding(.top, 8)
+                .padding(.bottom, 48)
             }
         }
     }

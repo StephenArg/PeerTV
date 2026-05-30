@@ -18,37 +18,48 @@ struct MainTabView: View {
         self.shuffleEnabled = DebugFlags.shuffleTabEnabled
     }
 
+    private var isAnonymous: Bool { session.isAnonymous }
+
     var body: some View {
         TabView(selection: $selectedTab) {
             HomeTab()
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag(MainTabSelection.home)
 
-            if shuffleEnabled {
-                ShuffleTab()
-                    .tabItem { Label("Shuffle", systemImage: "shuffle") }
-                    .tag(MainTabSelection.shuffle)
-            }
+            if !isAnonymous {
+                if shuffleEnabled {
+                    ShuffleTab()
+                        .tabItem { Label("Shuffle", systemImage: "shuffle") }
+                        .tag(MainTabSelection.shuffle)
+                }
 
-            PlaylistsTab()
-                .tabItem { Label("Playlists", systemImage: "list.and.film") }
-                .tag(MainTabSelection.playlists)
+                PlaylistsTab()
+                    .tabItem { Label("Playlists", systemImage: "list.and.film") }
+                    .tag(MainTabSelection.playlists)
+            }
 
             HistoryTab()
                 .tabItem { Label("History", systemImage: "clock") }
                 .tag(MainTabSelection.history)
 
-            SubscriptionsTab()
-                .tabItem { Label("Subscriptions", systemImage: "bell") }
-                .tag(MainTabSelection.subscriptions)
+            if !isAnonymous {
+                SubscriptionsTab()
+                    .tabItem { Label("Subscriptions", systemImage: "bell") }
+                    .tag(MainTabSelection.subscriptions)
 
-            ChannelsTab()
-                .tabItem { Label("Channels", systemImage: "person.2") }
-                .tag(MainTabSelection.channels)
+                ChannelsTab()
+                    .tabItem { Label("Channels", systemImage: "person.2") }
+                    .tag(MainTabSelection.channels)
+            }
 
             SettingsTab()
                 .tabItem { Label("Settings", systemImage: "gear") }
                 .tag(MainTabSelection.settings)
+        }
+        .onChange(of: session.isAnonymous) { _, anonymous in
+            if anonymous, selectedTab != .home, selectedTab != .history, selectedTab != .settings {
+                selectedTab = .home
+            }
         }
         .environmentObject(playlistEditCoordinator)
         .environment(\.peerTVPlaylistsTabRefreshToken, playlistsTabRefreshToken)

@@ -12,7 +12,22 @@ final class SessionStore: ObservableObject, AccountLoginHost {
     enum AppPhase: Equatable {
         case needsInstance
         case needsLogin
+        case anonymous
         case authenticated
+    }
+
+    var isAnonymous: Bool { phase == .anonymous }
+
+    /// Account bucket for `PlaybackPositionStore` (anonymous session or active signed-in account).
+    var playbackAccountId: UUID? {
+        switch phase {
+        case .anonymous:
+            return PlaybackPositionStore.anonymousAccountId
+        case .authenticated:
+            return activeAccountId
+        case .needsInstance, .needsLogin:
+            return nil
+        }
     }
 
     @Published var phase: AppPhase = .needsInstance
@@ -36,7 +51,8 @@ final class SessionStore: ObservableObject, AccountLoginHost {
 
     /// Stable identity for `MainTabView` so switching accounts recreates the tab hierarchy.
     var mainTabViewIdentity: String {
-        activeAccountId?.uuidString ?? "authenticated"
+        if phase == .anonymous { return "anonymous" }
+        return activeAccountId?.uuidString ?? "authenticated"
     }
 
     /// Authenticated API client for a saved account on `host`, if tokens are present.
@@ -194,6 +210,8 @@ final class SessionStore: ObservableObject, AccountLoginHost {
             } else {
                 DownloadManager.shared.setActiveAccount(nil)
             }
+        case .anonymous:
+            DownloadManager.shared.setActiveAccount(nil)
         case .needsLogin:
             if let id = activeAccountId, accounts.contains(where: { $0.id == id }) {
                 DownloadManager.shared.setActiveAccount(id)
@@ -203,6 +221,40 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         case .needsInstance:
             DownloadManager.shared.setActiveAccount(nil)
         }
+    }
+
+    /// Browse without signing in (fediverse home + Sepia search only).
+    func enterAnonymousMode() {
+        username = ""
+        userRole = nil
+        tokenStore.clear()
+        rebuildNetworking(usingAccountId: TokenStore.preLoginAccountId)
+        apiClient.baseURL = baseURL
+        phase = .anonymous
+        AnonymousHistoryStore.shared.activate()
+        syncDownloadManagerAccountContext()
+        Self.log.notice("enterAnonymousMode")
+    }
+
+    /// Leave anonymous browsing and return to the login screen.
+    func exitAnonymousToLogin() {
+        guard phase == .anonymous else { return }
+        AnonymousHistoryStore.shared.deactivate(clearEntries: true)
+        PlaybackPositionStore.clearAnonymousPositions()
+        username = ""
+        userRole = nil
+        tokenStore.clear()
+        rebuildNetworking(usingAccountId: TokenStore.preLoginAccountId)
+        apiClient.baseURL = baseURL
+        phase = .needsLogin
+        syncDownloadManagerAccountContext()
+        Self.log.notice("exitAnonymousToLogin")
+    }
+
+    private func leaveAnonymousIfNeeded(clearHistory: Bool = true) {
+        guard phase == .anonymous else { return }
+        AnonymousHistoryStore.shared.deactivate(clearEntries: clearHistory)
+        PlaybackPositionStore.clearAnonymousPositions()
     }
 
     func setInstance(_ url: URL) {
@@ -216,6 +268,7 @@ final class SessionStore: ObservableObject, AccountLoginHost {
 
     func didLogin(tokens: OAuthTokenResponse, username: String) {
         Self.log.notice("didLogin username=\(username, privacy: .public) refreshTokenSaved=\(!tokens.refreshToken.isEmpty)")
+        leaveAnonymousIfNeeded()
         guard let baseURL else { return }
 
         if let active = activeAccountId,
@@ -297,7 +350,27 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         isAddingAccount = false
     }
 
+    /// Whether `baseURL` + `username` already exists in the saved account list.
+    func hasAccount(baseURL: URL, username: String) -> Bool {
+        let instanceKey = Self.normalizedInstanceKey(for: baseURL)
+        let userKey = Self.normalizedUsername(username)
+        guard !instanceKey.isEmpty, !userKey.isEmpty else { return false }
+        return accounts.contains { record in
+            Self.normalizedInstanceKey(for: record.baseURL) == instanceKey
+                && Self.normalizedUsername(record.username) == userKey
+        }
+    }
+
+    func addAccountConflictMessage(baseURL: URL, username: String) -> String? {
+        guard isAddingAccount, hasAccount(baseURL: baseURL, username: username) else { return nil }
+        return "This account is already signed in on this server."
+    }
+
     func completeAddAccount(baseURL: URL, tokens: OAuthTokenResponse, typedUsername: String) {
+        guard addAccountConflictMessage(baseURL: baseURL, username: typedUsername) == nil else {
+            return
+        }
+        leaveAnonymousIfNeeded()
         let newId = UUID()
         TokenStore(accountId: newId).save(accessToken: tokens.accessToken, refreshToken: tokens.refreshToken)
         let record = AccountRecord(
@@ -428,5 +501,21 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         rows[idx] = row
         accounts = rows
         persistAccounts()
+    }
+
+    private static func normalizedInstanceKey(for url: URL) -> String {
+        if var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.fragment = nil
+            components.query = nil
+            if let host = components.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+               !host.isEmpty {
+                return host
+            }
+        }
+        return url.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func normalizedUsername(_ username: String) -> String {
+        username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }

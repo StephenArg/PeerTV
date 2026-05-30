@@ -3,6 +3,8 @@ import SwiftUI
 struct VideoCommentsSection: View {
     @ObservedObject var vm: VideoDetailViewModel
     @EnvironmentObject private var session: SessionStore
+    var postingBlocked: Bool = false
+    var onPostingBlocked: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -49,7 +51,11 @@ struct VideoCommentsSection: View {
 
                     HStack(alignment: .center, spacing: 20) {
                         Button {
-                            Task { await vm.postComment() }
+                            if postingBlocked {
+                                onPostingBlocked()
+                            } else {
+                                Task { await vm.postComment() }
+                            }
                         } label: {
                             HStack(spacing: 10) {
                                 Image(systemName: "paperplane.fill")

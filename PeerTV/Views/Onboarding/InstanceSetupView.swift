@@ -4,6 +4,10 @@ struct InstanceSetupView: View {
     @EnvironmentObject var session: SessionStore
 
     var body: some View {
-        InstanceSetupScreen(host: session, onInstanceReady: nil)
+        InstanceSetupScreen(
+            host: session,
+            onInstanceReady: nil,
+            onBrowseAnonymously: { session.enterAnonymousMode() }
+        )
     }
 }

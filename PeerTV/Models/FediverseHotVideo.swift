@@ -3,11 +3,15 @@ import Foundation
 struct FediverseHotVideosResponse: Decodable {
     let results: [FediverseHotVideo]
 
-    private static let hotAPIURL = URL(string: "https://api.peertube.watch/hot?limit=100")!
+    private static let hotAPIBase = URL(string: "https://api.peertube.watch/hot")!
 
     /// One-shot fetch of trending videos across the fediverse.
-    static func fetchVideos() async throws -> [Video] {
-        let (data, response) = try await URLSession.shared.data(from: hotAPIURL)
+    /// - Parameter languageIds: ISO codes in display order; omit `language_id` from the URL when empty.
+    static func fetchVideos(languageIds: [String] = []) async throws -> [Video] {
+        guard let url = hotAPIURL(languageIds: languageIds) else {
+            throw URLError(.badURL)
+        }
+        let (data, response) = try await URLSession.shared.data(from: url)
         guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
@@ -15,6 +19,16 @@ struct FediverseHotVideosResponse: Decodable {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let decoded = try decoder.decode(FediverseHotVideosResponse.self, from: data)
         return decoded.results.map { $0.toVideo() }
+    }
+
+    static func hotAPIURL(languageIds: [String]) -> URL? {
+        var components = URLComponents(url: hotAPIBase, resolvingAgainstBaseURL: false)
+        var queryItems = [URLQueryItem(name: "window_hours", value: "720")]
+        if let languageValue = FediverseHotLanguage.queryValue(from: languageIds) {
+            queryItems.append(URLQueryItem(name: "language_id", value: languageValue))
+        }
+        components?.queryItems = queryItems
+        return components?.url
     }
 }
 

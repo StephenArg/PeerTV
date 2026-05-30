@@ -6,6 +6,9 @@ enum PlaybackPositionStore {
     private static let enabledKey = "PeerTV.resumePlaybackEnabled"
     private static let positionsKey = "PeerTV.playbackPositions"
 
+    /// Resume positions for anonymous browsing (separate from signed-in accounts).
+    static let anonymousAccountId = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+
     /// Threshold for considering a video "finished" — if the user is within this
     /// percentage of the total duration, the saved position is cleared.
     static let finishedThreshold: Double = 0.07
@@ -91,10 +94,30 @@ enum PlaybackPositionStore {
         UserDefaults.standard.removeObject(forKey: positionsKey)
     }
 
+    /// Removes saved positions for one account namespace (e.g. anonymous session on sign-out).
+    static func clearAll(for accountId: UUID) {
+        let prefix = "\(accountId.uuidString):"
+        var dict = UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double] ?? [:]
+        dict = dict.filter { !$0.key.hasPrefix(prefix) }
+        UserDefaults.standard.set(dict, forKey: positionsKey)
+    }
+
+    /// Clears anonymous-session resume data.
+    static func clearAnonymousPositions() {
+        clearAll(for: anonymousAccountId)
+    }
+
     /// Returns the count of saved positions (for display in settings).
     static var savedPositionCount: Int {
         let dict = UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double] ?? [:]
-        return dict.count
+        let anonymousPrefix = "\(anonymousAccountId.uuidString):"
+        return dict.filter { !$0.key.hasPrefix(anonymousPrefix) }.count
+    }
+
+    static func savedPositionCount(for accountId: UUID) -> Int {
+        let prefix = "\(accountId.uuidString):"
+        let dict = UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double] ?? [:]
+        return dict.filter { $0.key.hasPrefix(prefix) }.count
     }
 
     private static func storageKey(videoId: String, accountId: UUID) -> String {
