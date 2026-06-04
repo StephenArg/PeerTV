@@ -278,6 +278,7 @@ struct VideoGridView: View {
 struct VideoCardView: View {
     @EnvironmentObject var session: SessionStore
     @Environment(\.isFocused) var isFocused
+    @ObservedObject private var downloadManager = DownloadManager.shared
     let video: Video
     var showOriginHost: Bool = false
     /// When set (e.g. anonymous history), use this URL directly instead of re-resolving paths.
@@ -373,15 +374,26 @@ struct VideoCardView: View {
     }
 
     private var metadataLine: some View {
-        HStack(spacing: 0) {
+        let isDownloaded = downloadManager.isDownloaded(video.stableId)
+        let hasViews = video.abbreviatedViewsLabel != nil
+        let hasLeadingMetadata = video.relativeDate != nil || hasViews
+
+        return HStack(spacing: 0) {
             if let date = video.relativeDate {
                 Text(date)
             }
-            if video.relativeDate != nil, video.abbreviatedViewsLabel != nil {
+            if video.relativeDate != nil, hasViews {
                 Text(" · ")
             }
             if let label = video.abbreviatedViewsLabel {
                 Text(label)
+            }
+            if hasLeadingMetadata, isDownloaded {
+                Text(" · ")
+            }
+            if isDownloaded {
+                Image(systemName: "arrow.down.circle.fill")
+                    .accessibilityLabel("Downloaded")
             }
         }
         .font(.caption2)

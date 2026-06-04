@@ -180,18 +180,7 @@ struct PlaylistDetailView: View {
                                             Button {
                                                 downloadManager.cancelPlaylistBatch()
                                             } label: {
-                                                HStack(spacing: 16) {
-                                                    ProgressView(value: Double(batch.completed), total: Double(max(batch.total, 1)))
-                                                        .progressViewStyle(.linear)
-                                                        .frame(width: 120)
-                                                    Text("\(batch.completed)/\(batch.total)")
-                                                        .monospacedDigit()
-                                                    Image(systemName: "xmark.circle")
-                                                        .foregroundStyle(.secondary)
-                                                }
-                                                .font(.callout)
-                                                .padding(.horizontal, 48)
-                                                .padding(.vertical, 12)
+                                                playlistBatchDownloadLabel(batch: batch)
                                             }
                                             .buttonStyle(.card)
                                         } else {
@@ -555,6 +544,49 @@ struct PlaylistDetailView: View {
             await privacyMenu
             allVideoIds = await vm.loadAllPlaylistVideoIds()
         }
+    }
+
+    @ViewBuilder
+    private func playlistBatchDownloadLabel(batch: DownloadManager.BatchProgress) -> some View {
+        let fileProgress = batch.currentVideoId.flatMap { downloadManager.activeDownloads[$0] }
+
+        HStack(spacing: 16) {
+            Group {
+                if let fileProgress, fileProgress.totalBytes > 0 {
+                    ProgressView(value: fileProgress.fractionCompleted)
+                } else {
+                    ProgressView()
+                }
+            }
+            .progressViewStyle(.linear)
+            .frame(width: 120)
+
+            Text("\(batch.completed) / \(batch.total) downloaded")
+                .monospacedDigit()
+                .lineLimit(1)
+
+            if let fileProgress, fileProgress.totalBytes > 0 {
+                Text("\(VideoDownloadBar.formatBytes(fileProgress.receivedBytes)) / \(VideoDownloadBar.formatBytes(fileProgress.totalBytes))")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            if let fileProgress, fileProgress.bytesPerSecond > 0 {
+                Text(VideoDownloadBar.formatSpeed(fileProgress.bytesPerSecond))
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Image(systemName: "xmark.circle")
+                .foregroundStyle(.secondary)
+        }
+        .font(.callout)
+        .padding(.horizontal, 48)
+        .padding(.vertical, 12)
     }
 
     private static func channelPickerTitle(_ channel: VideoChannel) -> String {

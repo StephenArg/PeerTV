@@ -60,6 +60,7 @@ final class DownloadManager: NSObject, ObservableObject {
         let playlistId: Int
         var total: Int
         var completed: Int
+        var currentVideoId: String?
     }
 
     private var urlSession: URLSession!
@@ -457,8 +458,8 @@ final class DownloadManager: NSObject, ObservableObject {
         batchPreference = preference
         batchAccessToken = accessToken
         batchApiClient = apiClient
-        batchCurrentVideoId = nil
-        batchProgress = BatchProgress(playlistId: playlistId, total: toDownload.count, completed: 0)
+        setBatchCurrentVideoId(nil)
+        batchProgress = BatchProgress(playlistId: playlistId, total: toDownload.count, completed: 0, currentVideoId: nil)
         processNextBatchItem()
     }
 
@@ -467,7 +468,7 @@ final class DownloadManager: NSObject, ObservableObject {
             cancelDownload(videoId: current)
         }
         batchQueue.removeAll()
-        batchCurrentVideoId = nil
+        setBatchCurrentVideoId(nil)
         batchPreference = nil
         batchAccessToken = nil
         batchApiClient = nil
@@ -480,9 +481,14 @@ final class DownloadManager: NSObject, ObservableObject {
         }
     }
 
+    private func setBatchCurrentVideoId(_ videoId: String?) {
+        batchCurrentVideoId = videoId
+        batchProgress?.currentVideoId = videoId
+    }
+
     private func processNextBatchItem() {
         guard !batchQueue.isEmpty else {
-            batchCurrentVideoId = nil
+            setBatchCurrentVideoId(nil)
             batchPreference = nil
             batchAccessToken = nil
             batchApiClient = nil
@@ -495,7 +501,7 @@ final class DownloadManager: NSObject, ObservableObject {
             processNextBatchItem()
             return
         }
-        batchCurrentVideoId = videoId
+        setBatchCurrentVideoId(videoId)
         guard let apiClient = batchApiClient else {
             batchProgress?.completed += 1
             processNextBatchItem()
@@ -629,11 +635,14 @@ final class DownloadManager: NSObject, ObservableObject {
 
             let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
                 guard let self else { return }
+                guard var dlProgress = self.activeDownloads[videoId] else { return }
                 let progress = exportSession.progress
                 let totalBytes = meta.expectedSize > 0 ? meta.expectedSize : Int64(100)
                 let received = Int64(Double(totalBytes) * Double(progress))
-                self.activeDownloads[videoId]?.receivedBytes = received
-                self.activeDownloads[videoId]?.bytesPerSecond = 0
+                dlProgress.receivedBytes = received
+                dlProgress.totalBytes = totalBytes
+                dlProgress.bytesPerSecond = 0
+                self.activeDownloads[videoId] = dlProgress
             }
             self.exportProgressTimers[videoId] = timer
 

@@ -159,8 +159,7 @@ final class PlayerPresenter {
                     playlistQueue: playlistQueue,
                     isLocalDownload: false,
                     accountId: accountId,
-                    durationSeconds: video.duration,
-                    skipWatchReporting: isPrivatePath
+                    durationSeconds: video.duration
                 )
             } catch {
                 PlaybackLog.log.error("videoDetail failed videoId=\(videoId, privacy: .public) \(error.localizedDescription, privacy: .public) \(String(describing: error), privacy: .public)")
@@ -282,8 +281,7 @@ final class PlayerPresenter {
         isLocalDownload: Bool,
         accountId: UUID?,
         prefetchedCaptions: [PeerTubeCaption]? = nil,
-        durationSeconds: Int? = nil,
-        skipWatchReporting: Bool = false
+        durationSeconds: Int? = nil
     ) {
         guard let root = Self.keyWindow?.rootViewController else {
             PlaybackLog.log.error("presentPlayer: no root VC videoId=\(videoId, privacy: .public)")
@@ -293,15 +291,6 @@ final class PlayerPresenter {
 
         let presenter = Self.topViewController(from: root)
 
-        let asset = AVPlayerViewControllerRepresentable.makeAsset(
-            url: url,
-            accessToken: accessToken,
-            instanceBaseURL: apiClient.baseURL
-        )
-        let item = AVPlayerItem(asset: asset)
-        item.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
-        HLSPlaybackPreferences.applyPreferredMaximumResolution(preferredMaximumResolution, to: item)
-
         let rawSaved: TimeInterval? = {
             guard let accountId else { return nil }
             return PlaybackPositionStore.position(for: videoId, accountId: accountId)
@@ -310,9 +299,31 @@ final class PlayerPresenter {
             stored: rawSaved,
             durationSeconds: durationSeconds
         )
+
+        let asset = AVPlayerViewControllerRepresentable.makeAsset(
+            url: url,
+            accessToken: accessToken,
+            instanceBaseURL: apiClient.baseURL
+        )
+        let item = AVPlayerItem(asset: asset)
+        HLSPlaybackPreferences.applyPreferredMaximumResolution(preferredMaximumResolution, to: item)
+
         if let pos = resumeSeconds, pos > 0 {
-            PlaybackLog.log.notice("will resume playback at \(pos, privacy: .public)s once ready videoId=\(videoId, privacy: .public)")
+            // Queue the seek before the item is attached to a player so HLS fetches segments at
+            // the resume point instead of buffering from t=0 and throwing that data away.
+            item.preferredForwardBufferDuration = 8
+            let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+            item.seek(
+                to: CMTime(seconds: pos, preferredTimescale: 600),
+                toleranceBefore: tolerance,
+                toleranceAfter: tolerance,
+                completionHandler: nil
+            )
+            PlaybackLog.log.notice("pre-seeking to \(pos, privacy: .public)s before attach videoId=\(videoId, privacy: .public)")
+        } else {
+            item.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
         }
+
         let player = AVPlayer(playerItem: item)
         player.automaticallyWaitsToMinimizeStalling = true
 
@@ -339,8 +350,7 @@ final class PlayerPresenter {
             instanceBaseURL: apiClient.baseURL,
             accountId: accountId,
             prefetchedCaptions: prefetchedCaptions,
-            initialResumeAt: resumeSeconds,
-            skipWatchReporting: skipWatchReporting
+            initialResumeAt: resumeSeconds
         ) { [weak self] in
             self?.isPresenting = false
         }
@@ -481,7 +491,6 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private var selectedCaptionLanguage: String?
     private var pendingResumeAt: TimeInterval?
     private var hasStartedInitialPlayback = false
-    private let skipWatchReporting: Bool
 
     private static let speeds: [Float] = [2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
     private static let watchReportInterval: Double = 30
@@ -495,7 +504,6 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
          accountId: UUID?,
          prefetchedCaptions: [PeerTubeCaption]? = nil,
          initialResumeAt: TimeInterval? = nil,
-         skipWatchReporting: Bool = false,
          onDismiss: @escaping () -> Void) {
         self.resolutions = resolutions
         self.autoURL = autoURL
@@ -510,7 +518,6 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         self.accountId = accountId
         self.playlistQueue = playlistQueue
         self.isLocalDownload = isLocalDownload
-        self.skipWatchReporting = skipWatchReporting
         self.pendingResumeAt = initialResumeAt.flatMap { $0 > 0 ? $0 : nil }
         self.onDismiss = onDismiss
         super.init()
@@ -829,41 +836,91 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         }
     }
 
-    /// Starts playback once the item is ready. Mid-stream resume seeks on the live player so
-    /// HLS can fetch segments at the target time instead of buffering from t=0.
+    /// Resumes playback at the given rate, using `playImmediately` when buffer is already ready.
+    private func resumePlayer(_ player: AVPlayer, at rate: Float) {
+        if player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+           player.currentItem?.isPlaybackLikelyToKeepUp == true {
+            player.playImmediately(atRate: rate)
+        } else {
+            player.play()
+            if abs(player.rate - rate) > 0.001 {
+                player.rate = rate
+            }
+        }
+    }
+
+    /// Called once a swapped `AVPlayerItem` reaches `.readyToPlay`. Seeks on the live player,
+    /// then resumes — never relies on a pre-seek queued before the item was attached.
+    private func handleQualitySwapReady(
+        player: AVPlayer,
+        item: AVPlayerItem,
+        seekSeconds: TimeInterval,
+        targetSpeed: Float
+    ) {
+        statusObservation?.invalidate()
+        statusObservation = nil
+
+        let time = CMTime(seconds: max(0, seekSeconds), preferredTimescale: 600)
+        let tolerance = CMTime(seconds: 2, preferredTimescale: 600)
+
+        player.seek(to: time, toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self] finished in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if !finished {
+                    PlaybackLog.log.error(
+                        "resolution switch seek incomplete videoId=\(self.videoId, privacy: .public) target=\(seekSeconds, privacy: .public)s"
+                    )
+                }
+                player.play()
+                if abs(player.rate - targetSpeed) > 0.001 {
+                    player.rate = targetSpeed
+                }
+                self.transportBar?.clearHeldPlayhead()
+                self.transportBar?.preferredPlaybackRate = targetSpeed
+                self.isSwitching = false
+                self.removeLoadingOverlay()
+                if let lang = self.selectedCaptionLanguage,
+                   self.captions.contains(where: { $0.languageId == lang }) {
+                    Task { await self.applyCaption(languageId: lang) }
+                }
+            }
+        }
+    }
+
+    /// Starts playback once the item is ready. When resuming from a saved timestamp the item
+    /// was already pre-seeked in `presentPlayer`; restore the full buffer cap and start playback.
     private func beginInitialPlaybackIfNeeded() {
         guard !hasStartedInitialPlayback else { return }
         hasStartedInitialPlayback = true
         guard let player else { return }
 
-        let startAtRate: () -> Void = { [weak self] in
-            guard let self else { return }
-            let rate = self.currentSpeed
-            if player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
-               player.currentItem?.isPlaybackLikelyToKeepUp == true {
-                player.playImmediately(atRate: rate)
-            } else {
-                player.play()
-                if abs(player.rate - rate) > 0.001 {
-                    player.rate = rate
-                }
-            }
-        }
-
         if let resumeAt = pendingResumeAt {
             pendingResumeAt = nil
-            let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
-            player.seek(
-                to: CMTime(seconds: resumeAt, preferredTimescale: 600),
-                toleranceBefore: tolerance,
-                toleranceAfter: tolerance
-            ) { finished in
-                guard finished else { return }
-                DispatchQueue.main.async { startAtRate() }
+            player.currentItem?.preferredForwardBufferDuration =
+                PlayerSettings.bufferCap.effectivePreferredBufferSeconds
+
+            let current = CMTimeGetSeconds(player.currentTime())
+            let alreadyAtTarget = current.isFinite && abs(current - resumeAt) <= 2.0
+
+            if alreadyAtTarget {
+                PlaybackLog.log.notice("resuming playback at \(resumeAt, privacy: .public)s videoId=\(self.videoId, privacy: .public)")
+                resumePlayer(player, at: currentSpeed)
+            } else {
+                let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+                player.seek(
+                    to: CMTime(seconds: resumeAt, preferredTimescale: 600),
+                    toleranceBefore: tolerance,
+                    toleranceAfter: tolerance
+                ) { [weak self] _ in
+                    guard let self, let player = self.player else { return }
+                    DispatchQueue.main.async {
+                        self.resumePlayer(player, at: self.currentSpeed)
+                    }
+                }
+                PlaybackLog.log.notice("confirming resume seek to \(resumeAt, privacy: .public)s videoId=\(self.videoId, privacy: .public)")
             }
-            PlaybackLog.log.notice("resuming playback at \(resumeAt, privacy: .public)s videoId=\(self.videoId, privacy: .public)")
         } else {
-            startAtRate()
+            resumePlayer(player, at: currentSpeed)
         }
     }
 
@@ -1064,7 +1121,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     }
 
     private func reportCurrentTime() {
-        guard !skipWatchReporting else { return }
+        guard accountId != nil else { return }
         guard let player, let apiClient else { return }
         let raw = CMTimeGetSeconds(player.currentTime())
         guard raw.isFinite else { return }
@@ -1189,13 +1246,30 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private func switchItem(to option: ResolutionOption?) {
         guard let player, let controller, !isSwitching else { return }
 
-        let seekTime = player.currentTime()
+        let seekSeconds = CMTimeGetSeconds(player.currentTime())
+        guard seekSeconds.isFinite else { return }
         let targetSpeed = currentSpeed
         let isHLSMaster = autoURL.pathExtension.lowercased() == "m3u8"
-        let targetURL = (isHLSMaster || option == nil) ? autoURL : (option?.url ?? autoURL)
         let label = option?.label ?? "Auto"
-        let maxResolution: CGSize? = isHLSMaster ? option?.preferredMaximumResolution : nil
-        let ext = targetURL.pathExtension.lowercased()
+        guard label != currentLabel else { return }
+
+        // HLS: load the resolution-specific variant playlist when picking a fixed quality
+        // (a real URL change AVFoundation can switch on). Auto keeps the master playlist.
+        // Initial playback still uses the master + `preferredMaximumResolution` for audio.
+        let targetURL: URL
+        let isHLSToMasterAuto: Bool
+        if isHLSMaster {
+            if let option {
+                targetURL = option.url
+                isHLSToMasterAuto = false
+            } else {
+                targetURL = autoURL
+                isHLSToMasterAuto = true
+            }
+        } else {
+            targetURL = option?.url ?? autoURL
+            isHLSToMasterAuto = false
+        }
 
         currentLabel = label
         isSwitching = true
@@ -1205,6 +1279,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         player.pause()
         showLoadingOverlay(in: controller)
 
+        let ext = targetURL.pathExtension.lowercased()
         if ext == "m3u8", let apiClient {
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -1220,8 +1295,10 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                     instanceBaseURL: self.instanceBaseURL
                 )
                 self.performAssetSwap(
-                    asset: asset, seekTime: seekTime, targetSpeed: targetSpeed,
-                    preferredMaximumResolution: maxResolution,
+                    asset: asset,
+                    seekSeconds: seekSeconds,
+                    targetSpeed: targetSpeed,
+                    isHLSToMasterAuto: isHLSToMasterAuto,
                     controller: controller
                 )
             }
@@ -1232,39 +1309,31 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                 instanceBaseURL: instanceBaseURL
             )
             performAssetSwap(
-                asset: asset, seekTime: seekTime, targetSpeed: targetSpeed,
-                preferredMaximumResolution: maxResolution,
+                asset: asset,
+                seekSeconds: seekSeconds,
+                targetSpeed: targetSpeed,
+                isHLSToMasterAuto: isHLSToMasterAuto,
                 controller: controller
             )
         }
     }
 
     private func performAssetSwap(
-        asset: AVURLAsset, seekTime: CMTime, targetSpeed: Float,
-        preferredMaximumResolution: CGSize? = nil,
+        asset: AVURLAsset,
+        seekSeconds: TimeInterval,
+        targetSpeed: Float,
+        isHLSToMasterAuto: Bool,
         controller: AVPlayerViewController
     ) {
         initialLoadObservation?.invalidate()
         initialLoadObservation = nil
         captionOverlayHost()?.clearCuesAndDisplay()
 
-        let tolerance = CMTime(seconds: 5, preferredTimescale: 600)
-
         let newItem = AVPlayerItem(asset: asset)
-        HLSPlaybackPreferences.applyPreferredMaximumResolution(preferredMaximumResolution, to: newItem)
-        // Mid-stream resolution switches prefer a *small* preroll so playback restarts quickly;
-        // the full user-selected buffer cap would force AVFoundation to fetch many minutes of
-        // the new target playlist before resuming. Keep a tight 8 s preroll here, then let
-        // AVPlayer grow the buffer to the user's cap during normal playback (set via the
-        // `.readyToPlay` branch below).
-        newItem.preferredForwardBufferDuration = 8
-
-        // Pre-install the seek directly on the `AVPlayerItem` before it is ever attached to a player.
-        // Without this, AVPlayer begins buffering from `currentTime = 0` during the unknown→readyToPlay
-        // preroll and then throws ~52 s of data away the moment we seek to e.g. t=570 s. Queuing the
-        // seek here tells AVFoundation the real playhead target, so the very first segments it fetches
-        // are at the seek destination.
-        newItem.seek(to: seekTime, toleranceBefore: tolerance, toleranceAfter: tolerance, completionHandler: nil)
+        if isHLSToMasterAuto {
+            HLSPlaybackPreferences.applyPreferredMaximumResolution(nil, to: newItem)
+        }
+        newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
 
         if let oldObs = endObserver {
             NotificationCenter.default.removeObserver(oldObs)
@@ -1277,13 +1346,21 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         statusObservation?.invalidate()
         statusObservation = nil
 
+        let heldDuration: TimeInterval? = {
+            guard let item = player?.currentItem else { return nil }
+            let d = CMTimeGetSeconds(item.duration)
+            return d.isFinite && d > 0 ? d : nil
+        }()
+        transportBar?.setHeldPlayhead(seekSeconds, duration: heldDuration)
         transportBar?.detach()
 
         // Create a fresh AVPlayer — replaceCurrentItem on tvOS with HLS
         // causes the new item to hang at status=0 indefinitely.
         let newPlayer = AVPlayer(playerItem: newItem)
+        newPlayer.automaticallyWaitsToMinimizeStalling = true
         self.player = newPlayer
         controller.player = newPlayer
+        transportBar?.preferredPlaybackRate = targetSpeed
         transportBar?.attach(player: newPlayer)
 
         endObserver = NotificationCenter.default.addObserver(
@@ -1295,33 +1372,28 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         }
         startProgressReporting()
 
-        statusObservation = newItem.observe(\.status, options: [.new]) {
+        statusObservation = newItem.observe(\.status, options: [.initial, .new]) {
             [weak self, weak newPlayer] item, _ in
             DispatchQueue.main.async {
-                guard let self else { return }
-                if item.status == .readyToPlay {
-                    self.statusObservation?.invalidate()
-                    self.statusObservation = nil
-                    // Let the buffer grow to the user-selected cap now that the switch preroll
-                    // is done. During preroll we used a tight 8 s so playback resumed quickly.
-                    item.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
-                    // No explicit second seek — the item was pre-seeked before the player was attached,
-                    // so its first buffered range is already at the target time. Just set the rate to
-                    // start playback.
-                    newPlayer?.rate = targetSpeed
-                    self.isSwitching = false
-                    self.removeLoadingOverlay()
-                    if let lang = self.selectedCaptionLanguage,
-                       self.captions.contains(where: { $0.languageId == lang }) {
-                        Task { await self.applyCaption(languageId: lang) }
-                    }
-                } else if item.status == .failed {
+                guard let self, let newPlayer else { return }
+                switch item.status {
+                case .readyToPlay:
+                    self.handleQualitySwapReady(
+                        player: newPlayer,
+                        item: item,
+                        seekSeconds: seekSeconds,
+                        targetSpeed: targetSpeed
+                    )
+                case .failed:
                     let err = item.error
                     PlaybackLog.log.error("resolution switch failed videoId=\(self.videoId, privacy: .public) \(err?.localizedDescription ?? "nil", privacy: .public)")
                     self.statusObservation?.invalidate()
                     self.statusObservation = nil
+                    self.transportBar?.clearHeldPlayhead()
                     self.isSwitching = false
                     self.removeLoadingOverlay()
+                default:
+                    break
                 }
             }
         }

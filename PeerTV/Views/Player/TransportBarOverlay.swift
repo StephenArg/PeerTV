@@ -542,7 +542,7 @@ final class TransportBarOverlayView: UIView {
 
     override init(frame: CGRect) {
         self.qualityButton = Self.makeIconButton(symbol: "sparkles.tv")
-        self.skipNextButton = Self.makeIconButton(symbol: "forward.end.fill")
+        self.skipNextButton = Self.makeIconButton(symbol: "forward.end")
         self.speedButton = Self.makeIconButton(symbol: "gauge.with.dots.needle.67percent")
         self.captionsButton = Self.makeIconButton(symbol: "captions.bubble")
         super.init(frame: frame)
@@ -1119,6 +1119,9 @@ final class TransportBarController: NSObject {
     private var userIntendsToPlay = true
     private var lastStallRecoveryAt: Date?
     private var isStallRecoveryInFlight = false
+    /// While a resolution variant is loading, keep labels/scrubber at the pre-switch playhead.
+    private var heldPlayhead: TimeInterval?
+    private var heldDuration: TimeInterval?
 
     init(
         showsQualityButton: Bool,
@@ -1283,7 +1286,11 @@ final class TransportBarController: NSObject {
         // Reset visible state so playlist transitions don't briefly show a stale play / pause icon
         // for the previous item before the new item's duration arrives.
         rootView.barView.stateIndicator.isHidden = true
-        rootView.barView.updateLabels(current: 0, duration: 0)
+        if heldPlayhead == nil {
+            rootView.barView.updateLabels(current: 0, duration: 0)
+        } else {
+            applyHeldPlayheadDisplay()
+        }
         resetThroughputTracking()
         userIntendsToPlay = true
         lastStallRecoveryAt = nil
@@ -1349,6 +1356,27 @@ final class TransportBarController: NSObject {
         }
     }
 
+    /// Pins elapsed/duration labels while a new stream loads at t=0 before its seek completes.
+    func setHeldPlayhead(_ current: TimeInterval, duration: TimeInterval?) {
+        heldPlayhead = current
+        heldDuration = duration
+        applyHeldPlayheadDisplay()
+    }
+
+    func clearHeldPlayhead() {
+        heldPlayhead = nil
+        heldDuration = nil
+    }
+
+    private func applyHeldPlayheadDisplay() {
+        guard let current = heldPlayhead else { return }
+        let duration = heldDuration ?? rootView.barView.trackControl.duration
+        rootView.barView.trackControl.duration = duration
+        guard !rootView.barView.trackControl.isScrubbing else { return }
+        rootView.barView.trackControl.currentTime = current
+        rootView.barView.updateLabels(current: current, duration: duration)
+    }
+
     // MARK: - Player observations
 
     private func observePlayer(_ player: AVPlayer) {
@@ -1401,6 +1429,18 @@ final class TransportBarController: NSObject {
             // Live streams — the bar is hidden elsewhere; keep the indicator hidden too.
             rootView.barView.stateIndicator.isHidden = true
             onTimeUpdate?(0)
+            return
+        }
+
+        if heldPlayhead != nil {
+            if heldDuration == nil {
+                let d = Self.seconds(player.currentItem?.duration ?? .zero)
+                if d > 0 { heldDuration = d }
+            }
+            applyHeldPlayheadDisplay()
+            updateBuffered()
+            updateDownloadThroughput()
+            onTimeUpdate?(heldPlayhead ?? 0)
             return
         }
 
