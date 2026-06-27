@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var showClearPositionsAlert = false
     @State private var savedPositionCount = PlaybackPositionStore.savedPositionCount
     @State private var resumePlaybackEnabled = PlaybackPositionStore.isEnabled
+    @State private var tilePreviewEnabled = TilePreviewSettings.isEnabled
     // Persisted via the same `UserDefaults` key read by `PlayerSettings.bufferCap` so playback
     // code and the Settings picker stay in sync across launches.
     @AppStorage(PlayerSettings.bufferCapKey) private var bufferCapRawValue: Int = BufferCap.gb1.rawValue
@@ -71,6 +72,9 @@ struct SettingsView: View {
                         }
                     }
                     Text("When enabled, videos resume from where you left off. Positions are cleared when a video finishes (within 7% of the end).")
+
+                    Toggle("Preview thumbnails on focus", isOn: $tilePreviewEnabled)
+                    Text("When a video is highlighted, its tile cycles through preview frames (the same thumbnails shown when scrubbing). Turn off to always show a single static thumbnail.")
                 }
 
                 settingsSection(title: "Accounts") {
@@ -222,11 +226,15 @@ struct SettingsView: View {
         .onChange(of: resumePlaybackEnabled) { _, newValue in
             PlaybackPositionStore.isEnabled = newValue
         }
+        .onChange(of: tilePreviewEnabled) { _, newValue in
+            TilePreviewSettings.isEnabled = newValue
+        }
     }
 
     private func refreshPlaybackSettings() {
         showVideoDetailRawJSON = DebugFlags.showVideoDetailRawJSON
         resumePlaybackEnabled = PlaybackPositionStore.isEnabled
+        tilePreviewEnabled = TilePreviewSettings.isEnabled
         if session.isAnonymous {
             savedPositionCount = PlaybackPositionStore.savedPositionCount(
                 for: PlaybackPositionStore.anonymousAccountId

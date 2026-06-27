@@ -52,6 +52,7 @@ struct ChannelsListView: View {
 
 struct ChannelCardView: View {
     @EnvironmentObject var session: SessionStore
+    @Environment(\.isFocused) private var isFocused
     let channel: VideoChannel
 
     var body: some View {
@@ -63,6 +64,8 @@ struct ChannelCardView: View {
                 )
             )
             .frame(width: 120, height: 120)
+            .scaleEffect(isFocused ? CardFocusStyle.parallaxImageScale : 1.0)
+            .animation(CardFocusStyle.animation, value: isFocused)
 
             Text(channel.displayName ?? channel.name ?? "Channel")
                 .font(.headline)
@@ -72,10 +75,12 @@ struct ChannelCardView: View {
             if let followers = channel.followersCount {
                 Text("\(followers) followers")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isFocused ? .primary : .secondary)
+                    .animation(CardFocusStyle.animation, value: isFocused)
             }
         }
         .frame(maxWidth: .infinity)
         .padding()
+        .modifier(FocusedCardEffect(isFocused: isFocused))
     }
 }

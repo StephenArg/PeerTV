@@ -121,6 +121,7 @@ extension EnvironmentValues {
 
 struct PlaylistCardView: View {
     @EnvironmentObject var session: SessionStore
+    @Environment(\.isFocused) private var isFocused
     let playlist: VideoPlaylist
 
     var body: some View {
@@ -130,9 +131,14 @@ struct PlaylistCardView: View {
                     .aspectRatio(16 / 9, contentMode: .fit)
                     .overlay {
                         CachedAsyncImage(url: session.thumbnailURL(path: playlist.thumbnailPath))
+                            .scaleEffect(isFocused ? CardFocusStyle.parallaxImageScale : 1.0)
+                            .animation(CardFocusStyle.animation, value: isFocused)
                     }
                     .clipped()
-                    .cornerRadius(10)
+                    .cornerRadius(CardFocusStyle.thumbnailCornerRadius)
+                    .overlay {
+                        CardThumbnailFocusOverlay(isFocused: isFocused)
+                    }
 
                 if let count = playlist.videosLength {
                     HStack(spacing: 4) {
@@ -147,6 +153,7 @@ struct PlaylistCardView: View {
                     .padding(8)
                 }
             }
+            .modifier(FocusedCardEffect(isFocused: isFocused, scaleAnchor: .bottom))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(playlist.displayName ?? "Playlist")
@@ -246,6 +253,8 @@ struct NewPlaylistNamePromptView: View {
 }
 
 private struct AddPlaylistPlaceholderCardView: View {
+    @Environment(\.isFocused) private var isFocused
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomTrailing) {
@@ -255,10 +264,13 @@ private struct AddPlaylistPlaceholderCardView: View {
                         Image(systemName: "plus.circle.fill")
                             .font(.system(size: 52))
                             .foregroundStyle(.secondary)
+                            .scaleEffect(isFocused ? CardFocusStyle.parallaxImageScale : 1.0)
+                            .animation(CardFocusStyle.animation, value: isFocused)
                     }
                     .clipped()
-                    .cornerRadius(10)
+                    .cornerRadius(CardFocusStyle.thumbnailCornerRadius)
             }
+            .modifier(FocusedCardEffect(isFocused: isFocused, scaleAnchor: .bottom))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("New playlist")

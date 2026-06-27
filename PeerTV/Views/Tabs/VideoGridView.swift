@@ -273,6 +273,123 @@ struct VideoGridView: View {
     }
 }
 
+// MARK: - Card Focus Style
+
+enum CardFocusStyle {
+    static let scale: CGFloat = 1.06
+    static let parallaxImageScale: CGFloat = 1.08
+    static let shadowColor = Color.black.opacity(0.55)
+    static let shadowRadius: CGFloat = 28
+    static let shadowY: CGFloat = 14
+    static let ringWidth: CGFloat = 3
+    static let thumbnailCornerRadius: CGFloat = 10
+    static let animation: Animation = .easeOut(duration: 0.18)
+}
+
+struct FocusedCardEffect: ViewModifier {
+    let isFocused: Bool
+    var scaleAnchor: UnitPoint = .center
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(
+                isFocused ? CardFocusStyle.scale : 1.0,
+                anchor: scaleAnchor
+            )
+            .shadow(
+                color: isFocused ? CardFocusStyle.shadowColor : .clear,
+                radius: isFocused ? CardFocusStyle.shadowRadius : 0,
+                y: isFocused ? CardFocusStyle.shadowY : 0
+            )
+            .animation(CardFocusStyle.animation, value: isFocused)
+    }
+}
+
+struct CardThumbnailFocusOverlay: View {
+    let isFocused: Bool
+
+    var body: some View {
+        LinearGradient(
+            colors: [.clear, .black.opacity(0.45)],
+            startPoint: .center,
+            endPoint: .bottom
+        )
+        .opacity(isFocused ? 1 : 0)
+        .animation(CardFocusStyle.animation, value: isFocused)
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Tile Preview (storyboard cycling on focus)
+
+/// When the parent tile is focused (and the setting is enabled), cycles through the video's
+/// storyboard sprite frames over its static thumbnail — the same frames shown when scrubbing.
+private struct TilePreviewLayer: View {
+    @EnvironmentObject var session: SessionStore
+    let video: Video
+    let isFocused: Bool
+    let federatedDisplay: Bool
+
+    /// Seconds each preview frame is shown before advancing.
+    private static let frameInterval: UInt64 = 900_000_000
+    /// Delay before previewing starts, so quickly passing focus over a tile doesn't load it.
+    private static let startDelay: UInt64 = 300_000_000
+    /// How long to cycle before freezing back on the original thumbnail.
+    private static let previewDuration: Double = 7
+
+    @State private var frame: UIImage?
+
+    var body: some View {
+        Color.clear
+            .overlay {
+                if let frame {
+                    Image(uiImage: frame)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                }
+            }
+            .allowsHitTesting(false)
+            .task(id: isFocused) {
+                frame = nil
+                guard isFocused, TilePreviewSettings.isEnabled else { return }
+                await runPreview()
+            }
+    }
+
+    private func runPreview() async {
+        try? await Task.sleep(nanoseconds: Self.startDelay)
+        guard !Task.isCancelled else { return }
+
+        guard let provider = await TileStoryboardLoader.shared.provider(
+            for: video,
+            instanceClient: session.apiClient,
+            federatedDisplay: federatedDisplay
+        ) else { return }
+        guard !Task.isCancelled else { return }
+
+        let step = Double(max(1, provider.storyboard.spriteDuration))
+        let duration = Double(video.duration ?? 0)
+        let span = duration > 0 ? duration : step * 20
+
+        var time: Double = 0
+        var elapsed: Double = 0
+        while !Task.isCancelled, elapsed < Self.previewDuration {
+            if let image = provider.image(for: time) {
+                withAnimation(.easeInOut(duration: 0.25)) { frame = image }
+            }
+            try? await Task.sleep(nanoseconds: Self.frameInterval)
+            elapsed += Double(Self.frameInterval) / 1_000_000_000
+            time += step
+            if time >= span { time = 0 }
+        }
+
+        // Preview window finished — freeze back on the original static thumbnail.
+        if !Task.isCancelled {
+            withAnimation(.easeInOut(duration: 0.25)) { frame = nil }
+        }
+    }
+}
+
 // MARK: - Video Card
 
 struct VideoCardView: View {
@@ -292,10 +409,22 @@ struct VideoCardView: View {
                 Color.gray.opacity(0.15)
                     .aspectRatio(16 / 9, contentMode: .fit)
                     .overlay {
-                        CachedAsyncImage(url: cardThumbnailURL(path: video.thumbnailPath))
+                        ZStack {
+                            CachedAsyncImage(url: cardThumbnailURL(path: video.thumbnailPath))
+                            TilePreviewLayer(
+                                video: video,
+                                isFocused: isFocused,
+                                federatedDisplay: showOriginHost
+                            )
+                        }
+                        .scaleEffect(isFocused ? CardFocusStyle.parallaxImageScale : 1.0)
+                        .animation(CardFocusStyle.animation, value: isFocused)
                     }
                     .clipped()
-                    .cornerRadius(10)
+                    .cornerRadius(CardFocusStyle.thumbnailCornerRadius)
+                    .overlay {
+                        CardThumbnailFocusOverlay(isFocused: isFocused)
+                    }
 
                 if !video.formattedDuration.isEmpty {
                     Text(video.formattedDuration)
@@ -312,6 +441,7 @@ struct VideoCardView: View {
                         .padding(8)
                 }
             }
+            .modifier(FocusedCardEffect(isFocused: isFocused, scaleAnchor: .bottom))
 
             // Avatar + metadata
             HStack(alignment: .top, spacing: 12) {
