@@ -47,6 +47,7 @@ enum Endpoint {
     case accountVideoChannels(name: String, start: Int, count: Int)
     case playlistDetail(playlistPathId: String)
     case playlistVideos(playlistPathId: String, start: Int, count: Int)
+    case videosExistInPlaylists(videoIds: [Int])
 
     // User
     case usersMe
@@ -123,6 +124,8 @@ enum Endpoint {
             return "/api/v1/video-playlists/\(playlistPathId)"
         case .playlistVideos(let playlistPathId, _, _):
             return "/api/v1/video-playlists/\(playlistPathId)/videos"
+        case .videosExistInPlaylists:
+            return "/api/v1/users/me/video-playlists/videos-exist"
         case .usersMe:
             return "/api/v1/users/me"
         case .myVideoRating(let videoId):
@@ -194,6 +197,8 @@ enum Endpoint {
             return items
         case .subscriptionExist(let uri):
             return [URLQueryItem(name: "uris", value: uri)]
+        case .videosExistInPlaylists(let videoIds):
+            return videoIds.map { URLQueryItem(name: "videoIds", value: "\($0)") }
         case .randomVideos:
             return [URLQueryItem(name: "count", value: "28")]
         case .videoCommentThreads(_, let start, let count, let sort):
@@ -245,6 +250,7 @@ enum Endpoint {
         case .mySubscriptions, .mySubscriptionVideos, .myHistory, .usersMe,
              .myVideoRating, .rateVideo, .addVideoToPlaylist,
              .removePlaylistElement, .reorderPlaylistVideos, .deletePlaylist,
+             .videosExistInPlaylists,
              .subscriptionExist, .subscribe, .unsubscribe,
              .watchVideo, .videoFileToken, .postVideoComment:
             return true

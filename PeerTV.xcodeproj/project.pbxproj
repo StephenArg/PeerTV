@@ -88,6 +88,7 @@
 		PP11223344556677AABB0001 /* PlayerLoadingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = PP11223344556677AABB0002 /* PlayerLoadingOverlay.swift */; };
 		PP22334444556677AABB0001 /* TransportBarOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = PP22334444556677AABB0002 /* TransportBarOverlay.swift */; };
 		PPS1223344556677AABB0001 /* PlaybackPositionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPS1223344556677AABB0002 /* PlaybackPositionStore.swift */; };
+		PPVM00112233445566778802 /* PlaylistPickerViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = PPVM00112233445566778801 /* PlaylistPickerViewModel.swift */; };
 		PS22334455667788AABB0001 /* PlayerSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = PS22334455667788AABB0002 /* PlayerSettings.swift */; };
 		SB33445566778899AABB0001 /* VideoStoryboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = SB33445566778899AABB0002 /* VideoStoryboard.swift */; };
 		VC11223344556677AABB0001 /* VideoCaption.swift in Sources */ = {isa = PBXBuildFile; fileRef = VC11223344556677AABB0002 /* VideoCaption.swift */; };
@@ -179,6 +180,7 @@
 		PP11223344556677AABB0002 /* PlayerLoadingOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerLoadingOverlay.swift; sourceTree = "<group>"; };
 		PP22334444556677AABB0002 /* TransportBarOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportBarOverlay.swift; sourceTree = "<group>"; };
 		PPS1223344556677AABB0002 /* PlaybackPositionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackPositionStore.swift; sourceTree = "<group>"; };
+		PPVM00112233445566778801 /* PlaylistPickerViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistPickerViewModel.swift; sourceTree = "<group>"; };
 		PS22334455667788AABB0002 /* PlayerSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerSettings.swift; sourceTree = "<group>"; };
 		SB33445566778899AABB0002 /* VideoStoryboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoStoryboard.swift; sourceTree = "<group>"; };
 		VC11223344556677AABB0002 /* VideoCaption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCaption.swift; sourceTree = "<group>"; };
@@ -342,6 +344,7 @@
 				26D4C7B759A31AFD03C8FAA7 /* InstanceSetupViewModel.swift */,
 				DD0AE8B22B3501976B57C409 /* LoginViewModel.swift */,
 				6331607972854217C1EFDCC1 /* PlaylistDetailViewModel.swift */,
+				PPVM00112233445566778801 /* PlaylistPickerViewModel.swift */,
 				38B0F707DF7B30CAA87BF447 /* PlaylistsViewModel.swift */,
 				FF11223344556677AABB0002 /* SearchViewModel.swift */,
 				CC11223344556677AABB0002 /* ShuffleViewModel.swift */,
@@ -523,6 +526,7 @@
 				A77979121BA1252EDAA0A317 /* InstanceSetupViewModel.swift in Sources */,
 				581BD045062EFBF1B313D28F /* LoginViewModel.swift in Sources */,
 				15D57075011B63CFAC2F7E42 /* PlaylistDetailViewModel.swift in Sources */,
+				PPVM00112233445566778802 /* PlaylistPickerViewModel.swift in Sources */,
 				9E660A660468C599D679823F /* PlaylistsViewModel.swift in Sources */,
 				8C4F3406BA09AE0E85A092CB /* SubscriptionsViewModel.swift in Sources */,
 				FE8363543BB6E0DFF7C64DC6 /* VideoDetailViewModel.swift in Sources */,
@@ -576,7 +580,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				DEVELOPMENT_TEAM = R6WYB662P7;
 				INFOPLIST_FILE = PeerTV/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PeerTV;
@@ -587,7 +591,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.8;
+				MARKETING_VERSION = 1.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.verofide.PeerTV;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -633,7 +637,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				DEVELOPMENT_TEAM = R6WYB662P7;
 				INFOPLIST_FILE = PeerTV/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PeerTV;
@@ -644,7 +648,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.8;
+				MARKETING_VERSION = 1.9;
 				PRODUCT_BUNDLE_IDENTIFIER = com.verofide.PeerTV;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

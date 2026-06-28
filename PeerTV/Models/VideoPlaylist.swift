@@ -54,6 +54,14 @@ struct VideoPlaylistPrivacyMenuItem: Identifiable, Hashable {
     let label: String
 }
 
+/// One row from `GET /api/v1/users/me/video-playlists/videos-exist` (video id → playlist memberships).
+struct VideoPlaylistExistEntry: Decodable {
+    let playlistElementId: Int?
+    let playlistId: Int?
+    let startTimestamp: Int?
+    let stopTimestamp: Int?
+}
+
 struct PlaylistElement: Decodable, Identifiable {
     let id: Int?
     let position: Int?

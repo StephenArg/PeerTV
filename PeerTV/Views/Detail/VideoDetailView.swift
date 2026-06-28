@@ -3,6 +3,7 @@ import SwiftUI
 struct VideoDetailView: View {
     @EnvironmentObject var session: SessionStore
     @StateObject private var vm: VideoDetailViewModel
+    @StateObject private var playlistPickerVM = PlaylistPickerViewModel()
     @State private var showDebugJSON = false
     @State private var showPlaylistPicker = false
     @State private var descriptionExpanded = false
@@ -235,7 +236,7 @@ struct VideoDetailView: View {
             DebugRawJSONView(title: vm.video?.name ?? "Video", json: vm.rawJSON ?? "No data")
         }
         .sheet(isPresented: $showPlaylistPicker) {
-            PlaylistPickerView(vm: vm)
+            PlaylistPickerView(vm: playlistPickerVM)
         }
         .task {
             let client = detailAPIClient
@@ -264,15 +265,22 @@ struct VideoDetailView: View {
                 await vm.loadUserRating()
             }
             await vm.loadComments()
+            if !federated, session.tokenStore.accessToken != nil {
+                playlistPickerVM.configure(
+                    apiClient: session.apiClient,
+                    accountName: session.username.isEmpty ? nil : session.username,
+                    numericVideoId: vm.video?.id
+                )
+            }
         }
         .onAppear {
             refreshSavedPosition()
         }
-        .onChange(of: vm.playlistMessage) { message in
+        .onChange(of: playlistPickerVM.playlistMessage) { message in
             if let message {
                 Task {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    vm.playlistMessage = nil
+                    playlistPickerVM.playlistMessage = nil
                 }
             }
         }
@@ -415,7 +423,6 @@ struct VideoDetailView: View {
 
             Button {
                 guardAuthenticatedAction {
-                    Task { await vm.loadMyPlaylists() }
                     showPlaylistPicker = true
                 }
             } label: {
@@ -433,16 +440,17 @@ struct VideoDetailView: View {
         }
         .frame(maxWidth: .infinity)
         .overlay(alignment: .bottom) {
-            if let message = vm.playlistMessage {
+            if let message = playlistPickerVM.playlistMessage {
                 playlistToastBanner(message: message)
             }
         }
-        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: vm.playlistMessage)
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: playlistPickerVM.playlistMessage)
     }
 
     @ViewBuilder
     private func playlistToastBanner(message: String) -> some View {
-        let isSuccess = message == VideoDetailViewModel.playlistAddedSuccessMessage
+        let isSuccess = message == PlaylistPickerViewModel.addedMessage
+            || message == PlaylistPickerViewModel.removedMessage
         HStack(alignment: .center, spacing: 12) {
             Image(systemName: isSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                 .font(.title3)
@@ -472,7 +480,7 @@ struct VideoDetailView: View {
 // MARK: - Playlist Picker
 
 struct PlaylistPickerView: View {
-    @ObservedObject var vm: VideoDetailViewModel
+    @ObservedObject var vm: PlaylistPickerViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var showNewPlaylistPrompt = false
 
@@ -499,10 +507,8 @@ struct PlaylistPickerView: View {
                             }
                             ForEach(vm.myPlaylists) { playlist in
                                 Button {
-                                    guard let pathId = playlist.peertubePlaylistPathId else { return }
                                     Task {
-                                        await vm.addToPlaylist(playlistPathId: pathId)
-                                        dismiss()
+                                        await vm.togglePlaylistMembership(for: playlist)
                                     }
                                 } label: {
                                     HStack(spacing: 16) {
@@ -522,6 +528,12 @@ struct PlaylistPickerView: View {
                                         }
 
                                         Spacer()
+
+                                        if vm.isVideoInPlaylist(playlist) {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .font(.title3)
+                                                .foregroundStyle(Color.accentColor)
+                                        }
                                     }
                                     .padding(.horizontal, 30)
                                     .padding(.vertical, 18)
@@ -548,6 +560,8 @@ struct PlaylistPickerView: View {
                             }
                             .buttonStyle(.card)
                         }
+                        .frame(maxWidth: 760)
+                        .frame(maxWidth: .infinity)
                         .padding(.horizontal, 60)
                         .padding(.vertical, 40)
                     }
@@ -562,10 +576,11 @@ struct PlaylistPickerView: View {
                 }
             }
         }
+        // Fills the screen with a dark backdrop. Needed when presented over the player (an
+        // over-full-screen host with a clear background); harmless behind the detail-screen sheet.
+        .background(Color.black.opacity(0.9).ignoresSafeArea())
         .task {
-            if !vm.myPlaylistsLoaded {
-                await vm.loadMyPlaylists()
-            }
+            await vm.loadMyPlaylists()
         }
     }
 }

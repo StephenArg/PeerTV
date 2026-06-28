@@ -494,6 +494,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private let isLocalDownload: Bool
     private var transportBar: TransportBarController?
     private var title: String
+    private weak var playlistPickerHost: UIViewController?
     private var captions: [PeerTubeCaption] = []
     /// Currently displayed caption track (`nil` = Off).
     private var selectedCaptionLanguage: String?
@@ -961,8 +962,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         )
     }
 
-    /// Loads the signed-in user's playlists and presents a picker; choosing one adds the
-    /// currently playing video to it.
+    /// Presents the same SwiftUI playlist picker used on the video detail screen.
     private func presentAddToPlaylistMenu() {
         guard let apiClient, let numericVideoId,
               let presenter = containerController ?? controller else { return }
@@ -973,19 +973,18 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
                 self.transportBar?.showSpeedNotification("Couldn’t load playlists")
                 return
             }
-            do {
-                let response: PaginatedResponse<VideoPlaylist> = try await apiClient.request(
-                    .accountPlaylists(name: name, start: 0, count: 100)
-                )
-                self.showPlaylistPicker(
-                    playlists: response.data ?? [],
-                    numericVideoId: numericVideoId,
-                    apiClient: apiClient,
-                    presenter: presenter
-                )
-            } catch {
-                self.transportBar?.showSpeedNotification("Couldn’t load playlists")
+            let pickerVM = PlaylistPickerViewModel()
+            pickerVM.configure(apiClient: apiClient, accountName: name, numericVideoId: numericVideoId)
+            pickerVM.onFeedback = { [weak self] message in
+                self?.transportBar?.showSpeedNotification(message)
             }
+            let host = UIHostingController(rootView: PlaylistPickerView(vm: pickerVM))
+            host.modalPresentationStyle = .overFullScreen
+            // Let the SwiftUI picker's own background fill the screen (it draws a dark backdrop);
+            // otherwise the player video shows through this over-full-screen presentation.
+            host.view.backgroundColor = .clear
+            self.playlistPickerHost = host
+            presenter.present(host, animated: true)
         }
     }
 
@@ -997,68 +996,6 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             return me.username
         } catch {
             return nil
-        }
-    }
-
-    private func showPlaylistPicker(
-        playlists: [VideoPlaylist],
-        numericVideoId: Int,
-        apiClient: PeerTubeAPIClient,
-        presenter: UIViewController
-    ) {
-        let alert = UIAlertController(title: "Add to Playlist", message: nil, preferredStyle: .actionSheet)
-        for playlist in playlists {
-            guard let pathId = playlist.peertubePlaylistPathId else { continue }
-            let action = UIAlertAction(title: playlist.displayName ?? "Untitled", style: .default) { [weak self] _ in
-                self?.addCurrentVideo(toPlaylistPathId: pathId, numericVideoId: numericVideoId, apiClient: apiClient)
-            }
-            alert.addAction(action)
-        }
-        alert.addAction(UIAlertAction(title: "New Playlist…", style: .default) { [weak self] _ in
-            self?.promptNewPlaylist(numericVideoId: numericVideoId, apiClient: apiClient, presenter: presenter)
-        })
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        presenter.present(alert, animated: true)
-    }
-
-    private func promptNewPlaylist(
-        numericVideoId: Int,
-        apiClient: PeerTubeAPIClient,
-        presenter: UIViewController
-    ) {
-        let alert = UIAlertController(title: "New Playlist", message: nil, preferredStyle: .alert)
-        alert.addTextField { $0.placeholder = "Playlist name" }
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Create", style: .default) { [weak self, weak alert] _ in
-            let name = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty else { return }
-            self?.createPlaylistAndAddCurrentVideo(named: name, numericVideoId: numericVideoId, apiClient: apiClient)
-        })
-        presenter.present(alert, animated: true)
-    }
-
-    private func addCurrentVideo(toPlaylistPathId pathId: String, numericVideoId: Int, apiClient: PeerTubeAPIClient) {
-        Task { [weak self] in
-            do {
-                _ = try await apiClient.rawRequest(.addVideoToPlaylist(playlistPathId: pathId, videoId: numericVideoId))
-                NotificationCenter.default.post(name: .peerTVPlaylistsNeedRefresh, object: nil)
-                await MainActor.run { self?.transportBar?.showSpeedNotification("Added to playlist") }
-            } catch {
-                await MainActor.run { self?.transportBar?.showSpeedNotification("Couldn’t add to playlist") }
-            }
-        }
-    }
-
-    private func createPlaylistAndAddCurrentVideo(named name: String, numericVideoId: Int, apiClient: PeerTubeAPIClient) {
-        Task { [weak self] in
-            do {
-                let playlistId = try await apiClient.createVideoPlaylist(displayName: name)
-                _ = try await apiClient.rawRequest(.addVideoToPlaylist(playlistPathId: "\(playlistId)", videoId: numericVideoId))
-                NotificationCenter.default.post(name: .peerTVPlaylistsNeedRefresh, object: nil)
-                await MainActor.run { self?.transportBar?.showSpeedNotification("Added to playlist") }
-            } catch {
-                await MainActor.run { self?.transportBar?.showSpeedNotification("Couldn’t add to playlist") }
-            }
         }
     }
 
