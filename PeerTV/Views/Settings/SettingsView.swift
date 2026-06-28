@@ -136,6 +136,26 @@ struct SettingsView: View {
                     }
                 }
 
+                settingsSection(title: "Help") {
+                    NavigationLink {
+                        ControlsHelpView()
+                    } label: {
+                        HStack {
+                            Image(systemName: "hand.tap.fill")
+                            Text("Controls")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 16)
+                        .padding(.horizontal, 20)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.card)
+                } footer: {
+                    Text("Discover hidden gestures and remote shortcuts for browsing and playback.")
+                }
+
                 settingsSection(title: "About") {
                     LabeledContent("App Version", value: "1.0.0")
                     LabeledContent("Platform", value: "tvOS")

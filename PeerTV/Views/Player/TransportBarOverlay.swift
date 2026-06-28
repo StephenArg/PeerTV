@@ -65,6 +65,10 @@ private enum TransportBarMetrics {
     static let adequateBufferAheadSeconds: TimeInterval = 2
     /// Minimum gap between automatic stall-recovery attempts (avoids hammering AVPlayer).
     static let stallRecoveryCooldown: TimeInterval = 1.5
+    /// Thin HUD strip shown on Play/Pause double-press.
+    static let quickOptionsBarHeight: CGFloat = 88
+    static let quickOptionsHorizontalInset: CGFloat = 120
+    static let quickOptionsContentPadding: CGFloat = 16
 }
 
 // MARK: - Download throughput display
@@ -475,13 +479,136 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
     }
 }
 
+// MARK: - Marquee title
+
+/// Single-line label that scrolls horizontally when its text is wider than the available
+/// width. While scrolling is enabled it animates the text left, loops seamlessly (a second
+/// copy follows after a gap), and resets to the start when scrolling is disabled. When the
+/// text fits, it behaves like a static left-aligned label.
+final class MarqueeLabel: UIView {
+
+    private let label = UILabel()
+    /// Trailing copy that follows `label` after `gap`, giving a seamless wrap-around loop.
+    private let duplicateLabel = UILabel()
+
+    /// Empty space (points) between the end of one copy and the start of the next.
+    private let gap: CGFloat = 100
+    /// Scroll speed in points per second.
+    private let pointsPerSecond: CGFloat = 55
+    /// Initial pause before the first scroll so the start of the title is readable.
+    private let startDelay: TimeInterval = 1.5
+
+    private var isScrollingEnabled = true
+    private var isAnimating = false
+    private var lastLaidOutText: String?
+    private var lastLaidOutWidth: CGFloat = -1
+
+    var text: String? {
+        didSet {
+            guard text != oldValue else { return }
+            label.text = text
+            duplicateLabel.text = text
+            lastLaidOutWidth = -1
+            setNeedsLayout()
+        }
+    }
+
+    var font: UIFont? {
+        get { label.font }
+        set { label.font = newValue; duplicateLabel.font = newValue; lastLaidOutWidth = -1; setNeedsLayout() }
+    }
+
+    var textColor: UIColor? {
+        get { label.textColor }
+        set { label.textColor = newValue; duplicateLabel.textColor = newValue }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+        for inner in [label, duplicateLabel] {
+            inner.numberOfLines = 1
+            inner.lineBreakMode = .byClipping
+            inner.shadowColor = UIColor.black.withAlphaComponent(0.35)
+            inner.shadowOffset = CGSize(width: 0, height: 1)
+            addSubview(inner)
+        }
+        duplicateLabel.isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not implemented") }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: label.intrinsicContentSize.height)
+    }
+
+    /// Enables/disables scrolling (e.g. tied to transport bar visibility). Disabling resets
+    /// the title to its start so the leading text is shown when the bar reappears.
+    func setScrolling(_ enabled: Bool) {
+        guard isScrollingEnabled != enabled else { return }
+        isScrollingEnabled = enabled
+        lastLaidOutWidth = -1
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let width = bounds.width
+        guard width > 0 else { return }
+        if width == lastLaidOutWidth && text == lastLaidOutText { return }
+        lastLaidOutWidth = width
+        lastLaidOutText = text
+
+        stopAnimation()
+        let textWidth = ceil(label.sizeThatFits(CGSize(width: .greatestFiniteMagnitude, height: bounds.height)).width)
+        let needsScroll = isScrollingEnabled && textWidth > width
+
+        label.frame = CGRect(x: 0, y: 0, width: textWidth, height: bounds.height)
+        if needsScroll {
+            duplicateLabel.isHidden = false
+            duplicateLabel.frame = CGRect(x: textWidth + gap, y: 0, width: textWidth, height: bounds.height)
+            startAnimation(cycle: textWidth + gap)
+        } else {
+            duplicateLabel.isHidden = true
+        }
+    }
+
+    private func startAnimation(cycle: CGFloat) {
+        guard cycle > 0 else { return }
+        isAnimating = true
+        label.transform = .identity
+        duplicateLabel.transform = .identity
+        let duration = TimeInterval(cycle / pointsPerSecond)
+        UIView.animate(
+            withDuration: duration,
+            delay: startDelay,
+            options: [.repeat, .curveLinear],
+            animations: { [weak self] in
+                guard let self else { return }
+                let shift = CGAffineTransform(translationX: -cycle, y: 0)
+                self.label.transform = shift
+                self.duplicateLabel.transform = shift
+            }
+        )
+    }
+
+    private func stopAnimation() {
+        guard isAnimating else { return }
+        isAnimating = false
+        label.layer.removeAllAnimations()
+        duplicateLabel.layer.removeAllAnimations()
+        label.transform = .identity
+        duplicateLabel.transform = .identity
+    }
+}
+
 // MARK: - Overlay layout
 
 /// Visual layout only. No observers.
 final class TransportBarOverlayView: UIView {
 
     let trackControl = FocusableTrackControl()
-    let titleLabel = UILabel()
+    let titleLabel = MarqueeLabel()
     let qualityButton: UIButton
     let skipNextButton: UIButton
     let speedButton: UIButton
@@ -588,11 +715,8 @@ final class TransportBarOverlayView: UIView {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.textColor = .white
         titleLabel.font = .systemFont(ofSize: 30, weight: .semibold).rounded()
-        titleLabel.textAlignment = .left
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.numberOfLines = 1
-        titleLabel.shadowColor = UIColor.black.withAlphaComponent(0.35)
-        titleLabel.shadowOffset = CGSize(width: 0, height: 1)
+        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         buttonStack.addArrangedSubview(qualityButton)
         buttonStack.addArrangedSubview(skipNextButton)
@@ -608,6 +732,8 @@ final class TransportBarOverlayView: UIView {
         buttonStack.axis = .horizontal
         buttonStack.spacing = TransportBarMetrics.buttonRowSpacing
         buttonStack.translatesAutoresizingMaskIntoConstraints = false
+        buttonStack.setContentHuggingPriority(.required, for: .horizontal)
+        buttonStack.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         trackControl.translatesAutoresizingMaskIntoConstraints = false
 
@@ -658,10 +784,13 @@ final class TransportBarOverlayView: UIView {
             buttonStack.trailingAnchor.constraint(equalTo: trackControl.trailingAnchor),
             buttonStack.bottomAnchor.constraint(equalTo: trackControl.topAnchor, constant: -TransportBarMetrics.titleSpacing),
 
-            // Title: above track, leading-aligned; shares the top row with the buttons
+            // Title: above track, leading-aligned; shares the top row with the buttons. Trailing
+            // is pinned to the buttons so the marquee has a definite width to clip / scroll within
+            // and can never push the buttons off-screen.
             titleLabel.leadingAnchor.constraint(equalTo: trackControl.leadingAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: buttonStack.leadingAnchor, constant: -16),
-            titleLabel.centerYAnchor.constraint(equalTo: buttonStack.centerYAnchor),
+            titleLabel.trailingAnchor.constraint(equalTo: buttonStack.leadingAnchor, constant: -16),
+            titleLabel.topAnchor.constraint(equalTo: buttonStack.topAnchor),
+            titleLabel.bottomAnchor.constraint(equalTo: buttonStack.bottomAnchor),
 
             // Times: under track, leading / trailing
             currentTimeLabel.leadingAnchor.constraint(equalTo: trackControl.leadingAnchor),
@@ -929,6 +1058,121 @@ final class SpeedNotificationView: UIView {
     }
 }
 
+// MARK: - Quick options HUD (Play/Pause double-press)
+
+/// Thin, centered horizontal strip of player option buttons. Focusable buttons inside a
+/// horizontally scrollable stack; left/right or touchpad swipe moves between items.
+final class QuickOptionsBarView: UIView {
+
+    struct QuickOption {
+        let symbol: String
+        let accessibilityLabel: String
+        let action: () -> Void
+    }
+
+    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
+    private let stackView = UIStackView()
+    private var optionButtons: [UIButton] = []
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setup()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not implemented") }
+
+    override var canBecomeFocused: Bool { false }
+
+    override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        optionButtons.isEmpty ? super.preferredFocusEnvironments : optionButtons
+    }
+
+    override var intrinsicContentSize: CGSize {
+        guard !optionButtons.isEmpty else {
+            return CGSize(width: UIView.noIntrinsicMetric, height: TransportBarMetrics.quickOptionsBarHeight)
+        }
+        let contentWidth = stackView.systemLayoutSizeFitting(
+            CGSize(width: UIView.layoutFittingExpandedSize.width, height: TransportBarMetrics.quickOptionsBarHeight),
+            withHorizontalFittingPriority: .fittingSizeLevel,
+            verticalFittingPriority: .required
+        ).width
+        let horizontalPadding = TransportBarMetrics.quickOptionsContentPadding * 2
+        return CGSize(
+            width: contentWidth + horizontalPadding,
+            height: TransportBarMetrics.quickOptionsBarHeight
+        )
+    }
+
+    func setItems(_ items: [QuickOption]) {
+        stackView.arrangedSubviews.forEach { view in
+            stackView.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        optionButtons.removeAll()
+        for item in items {
+            let button = Self.makeIconButton(symbol: item.symbol)
+            button.accessibilityLabel = item.accessibilityLabel
+            button.addAction(UIAction { _ in item.action() }, for: .primaryActionTriggered)
+            stackView.addArrangedSubview(button)
+            optionButtons.append(button)
+        }
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
+        superview?.setNeedsLayout()
+    }
+
+    private func setup() {
+        isHidden = true
+        alpha = 0
+        clipsToBounds = false
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.5
+        layer.shadowRadius = 24
+        layer.shadowOffset = CGSize(width: 0, height: 10)
+
+        blurView.layer.cornerRadius = 20
+        blurView.clipsToBounds = true
+        blurView.backgroundColor = UIColor(white: 0.08, alpha: 0.85)
+        blurView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(blurView)
+
+        stackView.axis = .horizontal
+        stackView.alignment = .center
+        stackView.spacing = TransportBarMetrics.buttonRowSpacing
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        blurView.contentView.addSubview(stackView)
+
+        let padding = TransportBarMetrics.quickOptionsContentPadding
+        NSLayoutConstraint.activate([
+            blurView.topAnchor.constraint(equalTo: topAnchor),
+            blurView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            blurView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            blurView.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            stackView.topAnchor.constraint(equalTo: blurView.contentView.topAnchor, constant: padding),
+            stackView.bottomAnchor.constraint(equalTo: blurView.contentView.bottomAnchor, constant: -padding),
+            stackView.leadingAnchor.constraint(equalTo: blurView.contentView.leadingAnchor, constant: padding),
+            stackView.trailingAnchor.constraint(equalTo: blurView.contentView.trailingAnchor, constant: -padding)
+        ])
+    }
+
+    private static func makeIconButton(symbol: String) -> UIButton {
+        var config = UIButton.Configuration.plain()
+        config.image = UIImage(
+            systemName: symbol,
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 32, weight: .semibold)
+        )
+        config.baseForegroundColor = .white
+        config.contentInsets = NSDirectionalEdgeInsets(top: 14, leading: 20, bottom: 14, trailing: 20)
+        let button = UIButton(configuration: config)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        return button
+    }
+}
+
 // MARK: - Root host
 
 /// Hosts the bar. The scrubber is always focusable (its UIControl alpha stays at 1); only the
@@ -936,8 +1180,10 @@ final class SpeedNotificationView: UIView {
 /// while the bar is "hidden", so any directional press, select, or touchpad motion wakes it.
 final class TransportBarRootView: UIView {
     let barView: TransportBarOverlayView
+    let quickOptionsView = QuickOptionsBarView()
 
     private(set) var isBarVisible: Bool = true
+    private(set) var isQuickOptionsVisible = false
 
     /// Fired whenever `setBarVisible` runs so the caption overlay can match transport chrome.
     var onBarVisibilityChanged: ((Bool) -> Void)?
@@ -973,6 +1219,26 @@ final class TransportBarRootView: UIView {
             speedNotificationView.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -80)
         ])
 
+        quickOptionsView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(quickOptionsView)
+        NSLayoutConstraint.activate([
+            quickOptionsView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            quickOptionsView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            quickOptionsView.leadingAnchor.constraint(
+                greaterThanOrEqualTo: leadingAnchor,
+                constant: TransportBarMetrics.quickOptionsHorizontalInset
+            ),
+            quickOptionsView.trailingAnchor.constraint(
+                lessThanOrEqualTo: trailingAnchor,
+                constant: -TransportBarMetrics.quickOptionsHorizontalInset
+            ),
+            quickOptionsView.heightAnchor.constraint(equalToConstant: TransportBarMetrics.quickOptionsBarHeight),
+            quickOptionsView.widthAnchor.constraint(
+                lessThanOrEqualTo: widthAnchor,
+                constant: -(TransportBarMetrics.quickOptionsHorizontalInset * 2)
+            )
+        ])
+
         setBarVisible(true, animated: false)
     }
 
@@ -981,6 +1247,7 @@ final class TransportBarRootView: UIView {
     func setBarVisible(_ visible: Bool, animated: Bool, completion: (() -> Void)? = nil) {
         isBarVisible = visible
         onBarVisibilityChanged?(visible)
+        barView.titleLabel.setScrolling(visible)
         let target: CGFloat = visible ? 1 : 0
         if animated {
             UIView.animate(withDuration: 0.25, animations: { [weak self] in
@@ -1022,8 +1289,31 @@ final class TransportBarRootView: UIView {
         speedNotificationView.alpha = 0
     }
 
+    func setQuickOptions(visible: Bool, animated: Bool = true) {
+        isQuickOptionsVisible = visible
+        if visible {
+            quickOptionsView.isHidden = false
+            if animated {
+                UIView.animate(withDuration: 0.2) { [weak self] in
+                    self?.quickOptionsView.alpha = 1
+                }
+            } else {
+                quickOptionsView.alpha = 1
+            }
+        } else if animated {
+            UIView.animate(withDuration: 0.15, animations: { [weak self] in
+                self?.quickOptionsView.alpha = 0
+            }, completion: { [weak self] _ in
+                self?.quickOptionsView.isHidden = true
+            })
+        } else {
+            quickOptionsView.alpha = 0
+            quickOptionsView.isHidden = true
+        }
+    }
+
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        [barView.trackControl]
+        isQuickOptionsVisible ? [quickOptionsView] : [barView.trackControl]
     }
 }
 
@@ -1134,6 +1424,14 @@ final class TransportBarController: NSObject {
     private var heldPlayhead: TimeInterval?
     private var heldDuration: TimeInterval?
 
+    /// Disambiguates single vs. double Play/Pause hardware presses.
+    private var playPauseSingleWorkItem: DispatchWorkItem?
+    private static let doublePressWindow: TimeInterval = 0.3
+    /// `pressesBegan` and `MPRemoteCommandCenter` both fire for the same physical press on
+    /// tvOS; swallow the duplicate so double-press detection isn't thrown off.
+    private var lastPlayPauseHandlingAt: Date?
+    private static let playPauseHandlingDedupWindow: TimeInterval = 0.1
+
     init(
         showsQualityButton: Bool,
         showsSkipNextButton: Bool = false,
@@ -1222,6 +1520,11 @@ final class TransportBarController: NSObject {
     /// `playerViewControllerShouldDismiss` — both may fire for the same press on tvOS because
     /// AVKit runs its own internal `.menu` gesture recognizer outside the responder chain.
     func handleMenuPressIfNeeded() -> Bool {
+        if rootView.isQuickOptionsVisible {
+            hideQuickOptions()
+            menuConsumedAt = Date()
+            return true
+        }
         if pendingScrubCommit {
             cancelVisualScrub()
             menuConsumedAt = Date()
@@ -1240,7 +1543,76 @@ final class TransportBarController: NSObject {
     /// that toggle state at button-down which we can't reliably suppress. Hold-for-speed
     /// lives on the touchpad click (`.select`) instead, which has no such parallel path.
     func handlePlayPausePress() {
-        playPauseTapAction()
+        let now = Date()
+        if let last = lastPlayPauseHandlingAt,
+           now.timeIntervalSince(last) < Self.playPauseHandlingDedupWindow {
+            return
+        }
+        lastPlayPauseHandlingAt = now
+
+        if rootView.isQuickOptionsVisible {
+            hideQuickOptions()
+            return
+        }
+        if let pending = playPauseSingleWorkItem {
+            pending.cancel()
+            playPauseSingleWorkItem = nil
+            presentQuickOptions()
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in
+            self?.playPauseSingleWorkItem = nil
+            self?.playPauseTapAction()
+        }
+        playPauseSingleWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.doublePressWindow, execute: work)
+    }
+
+    private func presentQuickOptions() {
+        let bar = rootView.barView
+        var items: [QuickOptionsBarView.QuickOption] = []
+        if bar.showsQualityButton {
+            items.append(.init(symbol: "sparkles.tv", accessibilityLabel: "Quality") { [weak self] in
+                self?.hideQuickOptions()
+                self?.onQualityTapped()
+            })
+        }
+        items.append(.init(symbol: "gauge.with.dots.needle.67percent", accessibilityLabel: "Speed") { [weak self] in
+            self?.hideQuickOptions()
+            self?.onSpeedTapped()
+        })
+        if bar.showsCaptionsButton {
+            items.append(.init(symbol: "captions.bubble", accessibilityLabel: "Captions") { [weak self] in
+                self?.hideQuickOptions()
+                self?.onCaptionsTapped?()
+            })
+        }
+        if bar.showsSkipNextButton {
+            items.append(.init(symbol: "forward.end", accessibilityLabel: "Play next in playlist") { [weak self] in
+                self?.hideQuickOptions()
+                self?.onSkipNextTapped?()
+            })
+        }
+        if bar.showsAddToPlaylistButton {
+            items.append(.init(symbol: "text.badge.plus", accessibilityLabel: "Add to playlist") { [weak self] in
+                self?.hideQuickOptions()
+                self?.onAddToPlaylistTapped?()
+            })
+        }
+        rootView.quickOptionsView.setItems(items)
+        rootView.setNeedsLayout()
+        rootView.layoutIfNeeded()
+        hideWorkItem?.cancel()
+        rootView.setQuickOptions(visible: true)
+        rootView.setNeedsFocusUpdate()
+        rootView.updateFocusIfNeeded()
+    }
+
+    private func hideQuickOptions() {
+        rootView.setQuickOptions(visible: false)
+        rootView.setNeedsFocusUpdate()
+        rootView.updateFocusIfNeeded()
+        scheduleAutoHideIfNeeded()
     }
 
     /// Touchpad click (`.select`) press-down on the scrubber. Starts the hold-detection
@@ -1362,6 +1734,9 @@ final class TransportBarController: NSObject {
 
     func tearDown() {
         detach()
+        playPauseSingleWorkItem?.cancel()
+        playPauseSingleWorkItem = nil
+        rootView.setQuickOptions(visible: false, animated: false)
         hideWorkItem?.cancel()
         hideWorkItem = nil
         rootView.cancelSpeedNotification()
@@ -1808,11 +2183,15 @@ final class TransportBarController: NSObject {
         // the bar would fade out mid-decision, leaving the user unable to see their target.
         if pendingScrubCommit { return }
 
+        // Keep visible while the Play/Pause double-press quick-options HUD is open.
+        if rootView.isQuickOptionsVisible { return }
+
         let work = DispatchWorkItem { [weak self] in
             guard let self, let player = self.player else { return }
             if player.timeControlStatus == .paused { return }
             if case .skimming = self.skimPhase { return }
             if self.pendingScrubCommit { return }
+            if self.rootView.isQuickOptionsVisible { return }
             // If the user has navigated up to the Quality / Speed buttons, keep the bar visible
             // and push the hide out — they're still engaged with the overlay. When focus
             // eventually returns to the scrubber, `FocusableTrackControl.didUpdateFocus` resets
@@ -2332,21 +2711,24 @@ final class TransportBarController: NSObject {
         seekBy(seconds: -TransportBarMetrics.skipSeconds); return .success
     }
     @objc private func mpTogglePlayPause(_ e: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
-        playPauseTapAction(); return .success
+        handlePlayPausePress()
+        return .success
     }
     @objc private func mpPlay(_ e: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
         if case .skimming = skimPhase { exitSkim(); return .success }
         if pendingScrubCommit, let target = rootView.barView.trackControl.scrubPreviewTime {
             commitVisualScrubSeek(to: target); return .success
         }
-        resumePlayback(forceImmediate: hasAdequateBufferAhead()); return .success
+        handlePlayPausePress()
+        return .success
     }
     @objc private func mpPause(_ e: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
         if case .skimming = skimPhase { exitSkim(); return .success }
         if pendingScrubCommit, let target = rootView.barView.trackControl.scrubPreviewTime {
             commitVisualScrubSeek(to: target); return .success
         }
-        pausePlayback(); return .success
+        handlePlayPausePress()
+        return .success
     }
 }
 
