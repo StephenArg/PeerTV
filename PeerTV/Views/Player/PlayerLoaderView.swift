@@ -154,6 +154,7 @@ final class PlayerPresenter {
                     resolutions: resolutionOptions,
                     accessToken: accessToken,
                     videoId: videoId,
+                    numericVideoId: video.id,
                     title: video.name ?? "",
                     apiClient: resolvedClient,
                     playlistQueue: playlistQueue,
@@ -275,6 +276,7 @@ final class PlayerPresenter {
         resolutions: [ResolutionOption],
         accessToken: String?,
         videoId: String,
+        numericVideoId: Int? = nil,
         title: String,
         apiClient: PeerTubeAPIClient,
         playlistQueue: PlaylistPlaybackQueue?,
@@ -343,6 +345,7 @@ final class PlayerPresenter {
             player: player,
             controller: playerVC,
             videoId: videoId,
+            numericVideoId: numericVideoId,
             title: title,
             apiClient: apiClient,
             playlistQueue: playlistQueue,
@@ -463,6 +466,11 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private var autoURL: URL
     private let accessToken: String?
     private var videoId: String
+    /// Numeric PeerTube video id for the currently playing item (needed to POST add-to-playlist).
+    /// `nil` for local downloads or videos played without a decoded detail payload.
+    private var numericVideoId: Int?
+    /// Account name (username) resolved lazily from `usersMe` and cached for the playlist picker.
+    private var cachedAccountName: String?
     private let apiClient: PeerTubeAPIClient?
     /// Snapshot from `apiClient.baseURL` at presentation time (avoids MainActor isolation in delegate methods).
     private let instanceBaseURL: URL?
@@ -497,7 +505,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
     init(resolutions: [ResolutionOption], autoURL: URL, initialLabel: String, accessToken: String?,
          player: AVPlayer, controller: AVPlayerViewController,
-         videoId: String, title: String, apiClient: PeerTubeAPIClient?,
+         videoId: String, numericVideoId: Int?, title: String, apiClient: PeerTubeAPIClient?,
          playlistQueue: PlaylistPlaybackQueue?,
          isLocalDownload: Bool,
          instanceBaseURL: URL?,
@@ -512,6 +520,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         self.player = player
         self.controller = controller
         self.videoId = videoId
+        self.numericVideoId = numericVideoId
         self.title = title
         self.apiClient = apiClient
         self.instanceBaseURL = instanceBaseURL
@@ -537,11 +546,13 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         transportBar = TransportBarController(
             showsQualityButton: !resolutions.isEmpty,
             showsSkipNextButton: Self.playlistHasNextItem(after: playlistQueue),
+            showsAddToPlaylistButton: Self.canAddToPlaylist(accessToken: accessToken, numericVideoId: numericVideoId),
             title: title,
             onQualityTapped: { [weak self] in self?.presentQualityMenu() },
             onSpeedTapped: { [weak self] in self?.presentSpeedMenu() },
             onCaptionsTapped: { [weak self] in self?.presentCaptionsMenu() },
             onSkipNextTapped: { [weak self] in self?.userRequestedSkipToNextPlaylistItem() },
+            onAddToPlaylistTapped: { [weak self] in self?.presentAddToPlaylistMenu() },
             onSpeedHold: { [weak self] in self?.toggleSpeedHold() },
             onTouchHoldBegan: { [weak self] in self?.startTouchHoldBoost() },
             onTouchHoldEnded: { [weak self] in self?.endTouchHoldBoost() }
@@ -935,6 +946,122 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         transportBar?.setShowsSkipNext(Self.playlistHasNextItem(after: playlistQueue))
     }
 
+    // MARK: - Add to playlist
+
+    /// The add-to-playlist control only makes sense for signed-in playback of a video with a
+    /// numeric id we can POST (so federated/anonymous playback and local downloads hide it).
+    private static func canAddToPlaylist(accessToken: String?, numericVideoId: Int?) -> Bool {
+        guard let accessToken, !accessToken.isEmpty else { return false }
+        return numericVideoId != nil
+    }
+
+    private func refreshAddToPlaylistButtonVisibility() {
+        transportBar?.setShowsAddToPlaylistButton(
+            Self.canAddToPlaylist(accessToken: accessToken, numericVideoId: numericVideoId)
+        )
+    }
+
+    /// Loads the signed-in user's playlists and presents a picker; choosing one adds the
+    /// currently playing video to it.
+    private func presentAddToPlaylistMenu() {
+        guard let apiClient, let numericVideoId,
+              let presenter = containerController ?? controller else { return }
+        transportBar?.pauseIfPlaying()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let name = await self.resolveAccountName(apiClient: apiClient), !name.isEmpty else {
+                self.transportBar?.showSpeedNotification("Couldn’t load playlists")
+                return
+            }
+            do {
+                let response: PaginatedResponse<VideoPlaylist> = try await apiClient.request(
+                    .accountPlaylists(name: name, start: 0, count: 100)
+                )
+                self.showPlaylistPicker(
+                    playlists: response.data ?? [],
+                    numericVideoId: numericVideoId,
+                    apiClient: apiClient,
+                    presenter: presenter
+                )
+            } catch {
+                self.transportBar?.showSpeedNotification("Couldn’t load playlists")
+            }
+        }
+    }
+
+    private func resolveAccountName(apiClient: PeerTubeAPIClient) async -> String? {
+        if let cachedAccountName, !cachedAccountName.isEmpty { return cachedAccountName }
+        do {
+            let me: UserMe = try await apiClient.request(.usersMe)
+            cachedAccountName = me.username
+            return me.username
+        } catch {
+            return nil
+        }
+    }
+
+    private func showPlaylistPicker(
+        playlists: [VideoPlaylist],
+        numericVideoId: Int,
+        apiClient: PeerTubeAPIClient,
+        presenter: UIViewController
+    ) {
+        let alert = UIAlertController(title: "Add to Playlist", message: nil, preferredStyle: .actionSheet)
+        for playlist in playlists {
+            guard let pathId = playlist.peertubePlaylistPathId else { continue }
+            let action = UIAlertAction(title: playlist.displayName ?? "Untitled", style: .default) { [weak self] _ in
+                self?.addCurrentVideo(toPlaylistPathId: pathId, numericVideoId: numericVideoId, apiClient: apiClient)
+            }
+            alert.addAction(action)
+        }
+        alert.addAction(UIAlertAction(title: "New Playlist…", style: .default) { [weak self] _ in
+            self?.promptNewPlaylist(numericVideoId: numericVideoId, apiClient: apiClient, presenter: presenter)
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        presenter.present(alert, animated: true)
+    }
+
+    private func promptNewPlaylist(
+        numericVideoId: Int,
+        apiClient: PeerTubeAPIClient,
+        presenter: UIViewController
+    ) {
+        let alert = UIAlertController(title: "New Playlist", message: nil, preferredStyle: .alert)
+        alert.addTextField { $0.placeholder = "Playlist name" }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Create", style: .default) { [weak self, weak alert] _ in
+            let name = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return }
+            self?.createPlaylistAndAddCurrentVideo(named: name, numericVideoId: numericVideoId, apiClient: apiClient)
+        })
+        presenter.present(alert, animated: true)
+    }
+
+    private func addCurrentVideo(toPlaylistPathId pathId: String, numericVideoId: Int, apiClient: PeerTubeAPIClient) {
+        Task { [weak self] in
+            do {
+                _ = try await apiClient.rawRequest(.addVideoToPlaylist(playlistPathId: pathId, videoId: numericVideoId))
+                NotificationCenter.default.post(name: .peerTVPlaylistsNeedRefresh, object: nil)
+                await MainActor.run { self?.transportBar?.showSpeedNotification("Added to playlist") }
+            } catch {
+                await MainActor.run { self?.transportBar?.showSpeedNotification("Couldn’t add to playlist") }
+            }
+        }
+    }
+
+    private func createPlaylistAndAddCurrentVideo(named name: String, numericVideoId: Int, apiClient: PeerTubeAPIClient) {
+        Task { [weak self] in
+            do {
+                let playlistId = try await apiClient.createVideoPlaylist(displayName: name)
+                _ = try await apiClient.rawRequest(.addVideoToPlaylist(playlistPathId: "\(playlistId)", videoId: numericVideoId))
+                NotificationCenter.default.post(name: .peerTVPlaylistsNeedRefresh, object: nil)
+                await MainActor.run { self?.transportBar?.showSpeedNotification("Added to playlist") }
+            } catch {
+                await MainActor.run { self?.transportBar?.showSpeedNotification("Couldn’t add to playlist") }
+            }
+        }
+    }
+
     /// Advances to the next playlist item when one exists. Used by end-of-playback autoplay and
     /// the transport-bar "skip next" control.
     private func advanceToNextPlaylistItemIfPossible() {
@@ -1021,8 +1148,10 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             statusObservation = nil
 
             videoId = nextVideoId
+            numericVideoId = video.id
             playlistQueue = nextQueue
             refreshSkipNextButtonVisibility()
+            refreshAddToPlaylistButtonVisibility()
             captions = []
             selectedCaptionLanguage = nil
             transportBar?.setShowsCaptionsButton(false)

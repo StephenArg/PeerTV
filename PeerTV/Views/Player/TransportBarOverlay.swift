@@ -486,6 +486,7 @@ final class TransportBarOverlayView: UIView {
     let skipNextButton: UIButton
     let speedButton: UIButton
     let captionsButton: UIButton
+    let addToPlaylistButton: UIButton
     let currentTimeLabel = UILabel()
     let remainingTimeLabel = UILabel()
     /// Small icon next to the elapsed-time label showing play/pause state or skim direction + stage.
@@ -510,6 +511,11 @@ final class TransportBarOverlayView: UIView {
     /// Shown when the video has at least one caption track (PeerTube).
     var showsCaptionsButton: Bool = false {
         didSet { captionsButton.isHidden = !showsCaptionsButton }
+    }
+
+    /// Shown when the user is signed in and the current video has a numeric id we can post.
+    var showsAddToPlaylistButton: Bool = false {
+        didSet { addToPlaylistButton.isHidden = !showsAddToPlaylistButton }
     }
 
     /// Fades the visible chrome (scrim / title / buttons / time labels / track fill) but keeps the
@@ -545,6 +551,7 @@ final class TransportBarOverlayView: UIView {
         self.skipNextButton = Self.makeIconButton(symbol: "forward.end")
         self.speedButton = Self.makeIconButton(symbol: "gauge.with.dots.needle.67percent")
         self.captionsButton = Self.makeIconButton(symbol: "captions.bubble")
+        self.addToPlaylistButton = Self.makeIconButton(symbol: "text.badge.plus")
         super.init(frame: frame)
         setup()
     }
@@ -591,10 +598,13 @@ final class TransportBarOverlayView: UIView {
         buttonStack.addArrangedSubview(skipNextButton)
         buttonStack.addArrangedSubview(speedButton)
         buttonStack.addArrangedSubview(captionsButton)
+        buttonStack.addArrangedSubview(addToPlaylistButton)
         skipNextButton.isHidden = true
         skipNextButton.accessibilityLabel = "Play next in playlist"
         captionsButton.isHidden = true
         captionsButton.accessibilityLabel = "Captions"
+        addToPlaylistButton.isHidden = true
+        addToPlaylistButton.accessibilityLabel = "Add to playlist"
         buttonStack.axis = .horizontal
         buttonStack.spacing = TransportBarMetrics.buttonRowSpacing
         buttonStack.translatesAutoresizingMaskIntoConstraints = false
@@ -1086,6 +1096,7 @@ final class TransportBarController: NSObject {
     private let onSpeedTapped: () -> Void
     private let onCaptionsTapped: (() -> Void)?
     private let onSkipNextTapped: (() -> Void)?
+    private let onAddToPlaylistTapped: (() -> Void)?
     /// Invoked when the touchpad click (`.select`) is held past `holdBeforeSpeedToggle`.
     /// The coordinator owns `currentSpeed` (so it can reapply on resolution swaps), so the
     /// actual 2x / 1x toggle lives there — this controller just detects the gesture and
@@ -1126,11 +1137,13 @@ final class TransportBarController: NSObject {
     init(
         showsQualityButton: Bool,
         showsSkipNextButton: Bool = false,
+        showsAddToPlaylistButton: Bool = false,
         title: String,
         onQualityTapped: @escaping () -> Void,
         onSpeedTapped: @escaping () -> Void,
         onCaptionsTapped: (() -> Void)? = nil,
         onSkipNextTapped: (() -> Void)? = nil,
+        onAddToPlaylistTapped: (() -> Void)? = nil,
         onSpeedHold: (() -> Void)? = nil,
         onTouchHoldBegan: (() -> Void)? = nil,
         onTouchHoldEnded: (() -> Void)? = nil
@@ -1141,6 +1154,7 @@ final class TransportBarController: NSObject {
         self.onSpeedTapped = onSpeedTapped
         self.onCaptionsTapped = onCaptionsTapped
         self.onSkipNextTapped = onSkipNextTapped
+        self.onAddToPlaylistTapped = onAddToPlaylistTapped
         self.onSpeedHold = onSpeedHold
         self.onTouchHoldBegan = onTouchHoldBegan
         self.onTouchHoldEnded = onTouchHoldEnded
@@ -1148,12 +1162,14 @@ final class TransportBarController: NSObject {
 
         rootView.barView.showsQualityButton = showsQualityButton
         rootView.barView.showsSkipNextButton = showsSkipNextButton
+        rootView.barView.showsAddToPlaylistButton = showsAddToPlaylistButton
         rootView.barView.titleLabel.text = title
 
         rootView.barView.qualityButton.addTarget(self, action: #selector(qualityPressed), for: .primaryActionTriggered)
         rootView.barView.speedButton.addTarget(self, action: #selector(speedPressed), for: .primaryActionTriggered)
         rootView.barView.captionsButton.addTarget(self, action: #selector(captionsPressed), for: .primaryActionTriggered)
         rootView.barView.skipNextButton.addTarget(self, action: #selector(skipNextPressed), for: .primaryActionTriggered)
+        rootView.barView.addToPlaylistButton.addTarget(self, action: #selector(addToPlaylistPressed), for: .primaryActionTriggered)
 
         rootView.barView.trackControl.onArrowPressBegan = { [weak self] d in self?.handleArrowPressBegan(direction: d) }
         rootView.barView.trackControl.onArrowPressEnded = { [weak self] d in self?.handleArrowPressEnded(direction: d) }
@@ -1180,6 +1196,18 @@ final class TransportBarController: NSObject {
 
     func setShowsCaptionsButton(_ show: Bool) {
         rootView.barView.showsCaptionsButton = show
+    }
+
+    func setShowsAddToPlaylistButton(_ show: Bool) {
+        rootView.barView.showsAddToPlaylistButton = show
+    }
+
+    /// Pauses playback (keeping the play/pause indicator in sync) when the player is currently
+    /// advancing. Used so presenting the add-to-playlist picker doesn't leave the video playing
+    /// behind the action sheet.
+    func pauseIfPlaying() {
+        guard let player, player.timeControlStatus != .paused else { return }
+        pausePlayback()
     }
 
     /// Timestamp of the most recent Menu press this controller consumed. Used to debounce
@@ -1809,6 +1837,7 @@ final class TransportBarController: NSObject {
             || rootView.barView.skipNextButton.isFocused
             || rootView.barView.speedButton.isFocused
             || rootView.barView.captionsButton.isFocused
+            || rootView.barView.addToPlaylistButton.isFocused
     }
 
     // MARK: - Actions (buttons / gestures / arrows)
@@ -2088,6 +2117,11 @@ final class TransportBarController: NSObject {
 
     @objc private func skipNextPressed() {
         onSkipNextTapped?()
+        showBarAndResetTimer()
+    }
+
+    @objc private func addToPlaylistPressed() {
+        onAddToPlaylistTapped?()
         showBarAndResetTimer()
     }
 
