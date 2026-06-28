@@ -7,8 +7,8 @@ actor FederatedOriginThrottle {
     private var inFlight: [String: Int] = [:]
     private var lastStartedAt: [String: Date] = [:]
 
-    private let minSpacingSeconds: TimeInterval = 0.25
-    private let maxConcurrentPerHost = 2
+    private let minSpacingSeconds: TimeInterval = 0.1
+    private let maxConcurrentPerHost = 4
 
     func acquire(host: String) async {
         let key = host.lowercased()

@@ -16,6 +16,9 @@ struct PlaylistDetailView: View {
     @FocusState private var playlistPlayFocusVideoId: String?
     @State private var playlistGridLayoutWidth: CGFloat = 0
     @State private var playlistAutoplayEnabled: Bool
+    @State private var playlistShuffleEnabled = false
+    /// Local shuffle order as `PlaylistElement.stableRowID`s; empty means no shuffle applied.
+    @State private var shuffleOrder: [String] = []
     @State private var lastPlayedVideoId: String?
     @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var allVideoIds: [String]?
@@ -59,7 +62,28 @@ struct PlaylistDetailView: View {
     }
 
     private var orderedPlaylistVideoIds: [String] {
-        vm.elements.compactMap { $0.video?.stableId }
+        if playlistShuffleEnabled, !isEditingPlaylist {
+            return shuffledElements.compactMap { $0.video?.stableId }
+        }
+        return vm.elements.compactMap { $0.video?.stableId }
+    }
+
+    /// `vm.elements` reordered by `shuffleOrder`. Any elements not yet in the
+    /// shuffle order (e.g. freshly paginated) are appended in their loaded order.
+    private var shuffledElements: [PlaylistElement] {
+        let byId = Dictionary(vm.elements.map { ($0.stableRowID, $0) }, uniquingKeysWith: { first, _ in first })
+        var result: [PlaylistElement] = []
+        var seen = Set<String>()
+        for rowID in shuffleOrder {
+            if let element = byId[rowID] {
+                result.append(element)
+                seen.insert(rowID)
+            }
+        }
+        for element in vm.elements where !seen.contains(element.stableRowID) {
+            result.append(element)
+        }
+        return result
     }
 
     private var hasAnyUndownloaded: Bool {
@@ -74,6 +98,7 @@ struct PlaylistDetailView: View {
 
     private var gridElements: [PlaylistElement] {
         if let r = reposition { return r.draft }
+        if playlistShuffleEnabled, !isEditingPlaylist { return shuffledElements }
         return vm.elements
     }
 
@@ -175,6 +200,22 @@ struct PlaylistDetailView: View {
                                         }
                                         .buttonStyle(.card)
                                         .accessibilityValue(playlistAutoplayEnabled ? "On" : "Off")
+
+                                        if playlistAutoplayEnabled {
+                                            Button {
+                                                togglePlaylistShuffle()
+                                            } label: {
+                                                HStack(spacing: 20) {
+                                                    Image(systemName: playlistShuffleEnabled ? "shuffle.circle.fill" : "shuffle.circle")
+                                                    Text(playlistShuffleEnabled ? "Shuffle" : "In order")
+                                                }
+                                                .font(.callout)
+                                                .padding(.horizontal, 48)
+                                                .padding(.vertical, 12)
+                                            }
+                                            .buttonStyle(.card)
+                                            .accessibilityValue(playlistShuffleEnabled ? "Shuffle" : "In order")
+                                        }
 
                                         if let batch = downloadManager.batchProgress, batch.playlistId == vm.playlistId {
                                             Button {
@@ -326,7 +367,7 @@ struct PlaylistDetailView: View {
                                 .onAppear {
                                     guard reposition == nil else { return }
                                     guard !isEditingPlaylist else { return }
-                                    if element.id == vm.elements.last?.id {
+                                    if element.stableRowID == gridElements.last?.stableRowID {
                                         Task { await vm.loadMore() }
                                     }
                                 }
@@ -427,6 +468,14 @@ struct PlaylistDetailView: View {
         }
         .onChange(of: playlistAutoplayEnabled) { _, newValue in
             UserDefaults.standard.set(newValue, forKey: Self.playlistAutoplayDefaultsKey(playlistId: vm.playlistId))
+            if !newValue {
+                playlistShuffleEnabled = false
+                shuffleOrder = []
+            }
+        }
+        .onChange(of: vm.elements.count) { _, _ in
+            guard playlistShuffleEnabled else { return }
+            extendShuffleOrderWithNewElements()
         }
         .confirmationDialog("Download Quality", isPresented: $showDownloadQualityPicker, titleVisibility: .visible) {
             ForEach(DownloadQualityPreference.allCases) { pref in
@@ -617,6 +666,27 @@ struct PlaylistDetailView: View {
                 playlistPrivacyFailureMessage = vm.errorMessage ?? "Privacy could not be updated."
             }
         }
+    }
+
+    /// Toggles between a local random order and the playlist's natural order.
+    private func togglePlaylistShuffle() {
+        playlistShuffleEnabled.toggle()
+        if playlistShuffleEnabled {
+            shuffleOrder = vm.elements.map { $0.stableRowID }.shuffled()
+        } else {
+            shuffleOrder = []
+        }
+    }
+
+    /// Keeps `shuffleOrder` in sync as pagination loads more elements: drops any
+    /// stale ids and appends newly loaded ones in a random position at the end.
+    private func extendShuffleOrderWithNewElements() {
+        let currentIds = vm.elements.map { $0.stableRowID }
+        let currentSet = Set(currentIds)
+        let existing = Set(shuffleOrder)
+        let additions = currentIds.filter { !existing.contains($0) }.shuffled()
+        guard !additions.isEmpty else { return }
+        shuffleOrder = shuffleOrder.filter { currentSet.contains($0) } + additions
     }
 
     private var actionMenuTitle: String {

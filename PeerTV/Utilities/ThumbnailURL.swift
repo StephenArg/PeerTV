@@ -28,14 +28,18 @@ enum PeerTubeAssetURL {
     }
 
     /// Resolves an avatar from PeerTube comment/account payloads (prefers absolute `fileUrl` when present).
+    /// - Parameter preferredWidth: when set, picks the smallest avatar at least this wide (falling back
+    ///   to the largest available) instead of always using the largest — avoids downloading a huge
+    ///   1500px source for a small tile avatar. `nil` keeps the previous "largest" behavior.
     static func resolve(
         avatars: [ActorImage]?,
         instanceBase: URL?,
         federatedHost: String? = nil,
-        cacheHost: String? = nil
+        cacheHost: String? = nil,
+        preferredWidth: Int? = nil
     ) -> URL? {
         guard let avatars, !avatars.isEmpty else { return nil }
-        let pick = avatars.max(by: { ($0.width ?? 0) < ($1.width ?? 0) }) ?? avatars[0]
+        let pick = selectAvatar(avatars, preferredWidth: preferredWidth)
         let pathURL = resolve(
             path: pick.path,
             instanceBase: instanceBase,
@@ -50,6 +54,14 @@ enum PeerTubeAssetURL {
             }
         }
         return pathURL
+    }
+
+    private static func selectAvatar(_ avatars: [ActorImage], preferredWidth: Int?) -> ActorImage {
+        guard let preferredWidth else {
+            return avatars.max(by: { ($0.width ?? 0) < ($1.width ?? 0) }) ?? avatars[0]
+        }
+        let bySize = avatars.sorted { ($0.width ?? 0) < ($1.width ?? 0) }
+        return bySize.first(where: { ($0.width ?? 0) >= preferredWidth }) ?? bySize.last ?? avatars[0]
     }
 
     private static func fileURLMatchesServingHost(_ url: URL, cacheHost: String?, instanceBase: URL?) -> Bool {

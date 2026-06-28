@@ -32,7 +32,6 @@ struct CachedAsyncImage: View {
     )
 
     @State private var uiImage: UIImage?
-    @State private var isLoading = false
 
     var body: some View {
         Group {
@@ -50,7 +49,7 @@ struct CachedAsyncImage: View {
     }
 
     private func loadImage() async {
-        guard let url, !isLoading else { return }
+        guard let url else { return }
 
         let key = url.absoluteString
         if let cached = ImageCache.shared.image(for: key) {
@@ -58,17 +57,18 @@ struct CachedAsyncImage: View {
             return
         }
 
-        isLoading = true
-        defer { isLoading = false }
-
+        // No `isLoading` guard: `.task(id: url)` already guarantees a single task per URL, and a
+        // guard shared across cancelled/replacement tasks can race so the new URL's load is skipped
+        // (e.g. when an enriched thumbnail URL replaces the original one).
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
+            guard !Task.isCancelled else { return }
             if let img = UIImage(data: data) {
                 ImageCache.shared.setImage(img, for: key)
                 uiImage = img
             }
         } catch {
-            // Silently fail; placeholder stays.
+            // Silently fail (including cancellation when the URL is superseded); placeholder stays.
         }
     }
 }

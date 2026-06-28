@@ -27,9 +27,6 @@ enum PeerTubeOriginClients {
         return client
     }
 
-    private static let retriableVideoDetailStatuses: Set<Int> = [403, 404, 500, 502, 503]
-    private static let rateLimitedStatuses: Set<Int> = [429]
-
     /// Loads video metadata, trying each host in order (for fediverse hot / remote origins).
     static func fetchVideoDetail(videoId: String, hosts: [String]) async throws -> (Data, PeerTubeAPIClient) {
         var lastError: Error?
@@ -48,12 +45,11 @@ enum PeerTubeOriginClients {
                 FederatedVideoDetailCache.store(host: key, videoId: videoId, data: data)
                 return (data, client)
             } catch {
+                // Try the next host on any failure (HTTP error, rate limit, or transport/TLS
+                // error — e.g. an expired cert on the index host). The media origin is usually
+                // the authoritative fallback.
                 lastError = error
-                if case APIError.httpError(let code, _) = error {
-                    if retriableVideoDetailStatuses.contains(code) { continue }
-                    if rateLimitedStatuses.contains(code) { throw error }
-                }
-                throw error
+                continue
             }
         }
         if let lastError { throw lastError }
@@ -73,6 +69,78 @@ enum PeerTubeOriginClients {
         } catch {
             return nil
         }
+    }
+
+    struct VideoMetadata {
+        var views: Int?
+        var avatars: [ActorImage]?
+        var thumbnailURL: String?
+    }
+
+    /// View count, channel avatars, and an origin-hosted thumbnail URL from a single cached or
+    /// throttled video detail fetch, trying each host in order. Used to enrich fediverse-trending
+    /// rows, whose hot-API feed omits the first two and serves thumbnails only from the index host.
+    /// Callers pass the media origin first: it is authoritative for the view count, distinct per
+    /// video (so requests fan out instead of funneling through one host), and survives an expired
+    /// or unavailable index host (e.g. peertube.watch).
+    static func fetchVideoMetadata(videoId: String, hosts: [String]) async -> VideoMetadata {
+        var tried = Set<String>()
+        let cleaned = hosts.compactMap { host -> String? in
+            let key = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !key.isEmpty, tried.insert(key).inserted else { return nil }
+            return key
+        }
+        guard !cleaned.isEmpty else { return VideoMetadata() }
+
+        for host in cleaned where FederatedVideoDetailCache.data(host: host, videoId: videoId) != nil {
+            return metadata(servedHost: host, videoId: videoId)
+        }
+        guard let (_, client) = try? await fetchVideoDetail(videoId: videoId, hosts: cleaned),
+              let servedHost = client.baseURL?.host?.lowercased(), !servedHost.isEmpty else {
+            return VideoMetadata()
+        }
+        return metadata(servedHost: servedHost, videoId: videoId)
+    }
+
+    private static func metadata(servedHost: String, videoId: String) -> VideoMetadata {
+        guard let video = FederatedVideoDetailCache.decodedVideo(host: servedHost, videoId: videoId) else {
+            return VideoMetadata()
+        }
+        let rawAvatars = video.channel?.avatars ?? video.account?.avatars
+        let thumbnailURL = PeerTubeAssetURL.resolve(
+            path: video.thumbnailPath,
+            instanceBase: nil,
+            federatedHost: servedHost,
+            cacheHost: servedHost
+        )?.absoluteString
+        return VideoMetadata(
+            views: video.views,
+            avatars: absoluteAvatars(rawAvatars, servedHost: servedHost),
+            thumbnailURL: thumbnailURL
+        )
+    }
+
+    /// Rewrites avatars to absolute URLs on the host that actually served the detail, so tiles
+    /// resolve them correctly regardless of which fallback host the data came from.
+    private static func absoluteAvatars(_ avatars: [ActorImage]?, servedHost: String) -> [ActorImage]? {
+        guard let avatars, !avatars.isEmpty else { return nil }
+        let resolved = avatars.compactMap { image -> ActorImage? in
+            guard let url = PeerTubeAssetURL.resolve(
+                avatars: [image],
+                instanceBase: nil,
+                federatedHost: servedHost,
+                cacheHost: servedHost
+            )?.absoluteString else { return nil }
+            return ActorImage(
+                width: image.width,
+                height: image.height,
+                path: nil,
+                fileUrl: url,
+                createdAt: image.createdAt,
+                updatedAt: image.updatedAt
+            )
+        }
+        return resolved.isEmpty ? nil : resolved
     }
 
     static func cachedChannelAvatars(videoId: String, hosts: [String]) -> [ActorImage]? {

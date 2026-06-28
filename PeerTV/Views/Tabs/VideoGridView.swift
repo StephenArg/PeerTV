@@ -167,7 +167,7 @@ struct VideoGridView: View {
                             )
                             .onAppear {
                                 if isFediverseTrending {
-                                    Task { await vm.enrichFediverseAvatar(for: video.stableId) }
+                                    Task { await vm.enrichFediverseRow(for: video.stableId) }
                                 }
                                 if video.stableId == vm.videos.last?.stableId {
                                     Task { await vm.loadMore() }
@@ -329,6 +329,9 @@ private struct TilePreviewLayer: View {
     let video: Video
     let isFocused: Bool
     let federatedDisplay: Bool
+    /// Set true once the preview window finishes (or there's nothing to preview), so the
+    /// parent can reveal the on-tile control hints.
+    @Binding var showControls: Bool
 
     /// Seconds each preview frame is shown before advancing.
     private static let frameInterval: UInt64 = 900_000_000
@@ -351,8 +354,15 @@ private struct TilePreviewLayer: View {
             .allowsHitTesting(false)
             .task(id: isFocused) {
                 frame = nil
-                guard isFocused, TilePreviewSettings.isEnabled else { return }
-                await runPreview()
+                showControls = false
+                guard isFocused else { return }
+                if TilePreviewSettings.isEnabled {
+                    await runPreview()
+                } else {
+                    try? await Task.sleep(nanoseconds: Self.startDelay)
+                }
+                guard !Task.isCancelled, isFocused else { return }
+                withAnimation(.easeInOut(duration: 0.3)) { showControls = true }
             }
     }
 
@@ -371,11 +381,17 @@ private struct TilePreviewLayer: View {
         let duration = Double(video.duration ?? 0)
         let span = duration > 0 ? duration : step * 20
 
+        // Snap between sprite frames without animation. Animating the image swap makes
+        // SwiftUI cross-fade the bitmap, which briefly reveals the static thumbnail
+        // underneath (a visible flash) between frames.
+        var noAnimation = Transaction()
+        noAnimation.disablesAnimations = true
+
         var time: Double = 0
         var elapsed: Double = 0
         while !Task.isCancelled, elapsed < Self.previewDuration {
             if let image = provider.image(for: time) {
-                withAnimation(.easeInOut(duration: 0.25)) { frame = image }
+                withTransaction(noAnimation) { frame = image }
             }
             try? await Task.sleep(nanoseconds: Self.frameInterval)
             elapsed += Double(Self.frameInterval) / 1_000_000_000
@@ -390,12 +406,38 @@ private struct TilePreviewLayer: View {
     }
 }
 
+// MARK: - Preview Control Hints
+
+/// On-tile hints shown at the bottom-left once the preview cycle finishes, telling the user
+/// what the remote buttons do for the focused video.
+private struct PreviewControlHints: View {
+    var body: some View {
+        HStack(spacing: 14) {
+            hint(icon: "info.circle", text: "Hold for details")
+        }
+        .font(.caption2)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color.black.opacity(0.6), in: Capsule())
+        .allowsHitTesting(false)
+    }
+
+    private func hint(icon: String, text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+            Text(text)
+        }
+    }
+}
+
 // MARK: - Video Card
 
 struct VideoCardView: View {
     @EnvironmentObject var session: SessionStore
     @Environment(\.isFocused) var isFocused
     @ObservedObject private var downloadManager = DownloadManager.shared
+    @State private var showPreviewControls = false
     let video: Video
     var showOriginHost: Bool = false
     /// When set (e.g. anonymous history), use this URL directly instead of re-resolving paths.
@@ -414,7 +456,8 @@ struct VideoCardView: View {
                             TilePreviewLayer(
                                 video: video,
                                 isFocused: isFocused,
-                                federatedDisplay: showOriginHost
+                                federatedDisplay: showOriginHost,
+                                showControls: $showPreviewControls
                             )
                         }
                         .scaleEffect(isFocused ? CardFocusStyle.parallaxImageScale : 1.0)
@@ -424,6 +467,13 @@ struct VideoCardView: View {
                     .cornerRadius(CardFocusStyle.thumbnailCornerRadius)
                     .overlay {
                         CardThumbnailFocusOverlay(isFocused: isFocused)
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        if showPreviewControls {
+                            PreviewControlHints()
+                                .padding(8)
+                                .transition(.opacity)
+                        }
                     }
 
                 if !video.formattedDuration.isEmpty {

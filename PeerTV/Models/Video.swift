@@ -121,8 +121,26 @@ struct Video: Decodable, Identifiable, Hashable {
         hasher.combine(stableId)
     }
 
+    // Compares the fields that drive tile/detail rendering — not just `stableId`. SwiftUI uses a
+    // view's stored Equatable properties to decide whether to re-render; an identity-only `==`
+    // makes enriched rows (same id, new views/avatars/thumbnail) look unchanged, so the UI stays
+    // stale until something else (e.g. focus) forces an update.
     static func == (lhs: Video, rhs: Video) -> Bool {
         lhs.stableId == rhs.stableId
+            && lhs.name == rhs.name
+            && lhs.views == rhs.views
+            && lhs.duration == rhs.duration
+            && lhs.publishedAt == rhs.publishedAt
+            && lhs.createdAt == rhs.createdAt
+            && lhs.thumbnailPath == rhs.thumbnailPath
+            && lhs.previewPath == rhs.previewPath
+            && lhs.commentReadHost == rhs.commentReadHost
+            && lhs.channel?.displayName == rhs.channel?.displayName
+            && lhs.channel?.host == rhs.channel?.host
+            && lhs.channel?.avatars?.count == rhs.channel?.avatars?.count
+            && lhs.channel?.avatars?.first?.fileUrl == rhs.channel?.avatars?.first?.fileUrl
+            && lhs.account?.displayName == rhs.account?.displayName
+            && lhs.account?.avatars?.first?.fileUrl == rhs.account?.avatars?.first?.fileUrl
     }
 
     /// Snapshot for anonymous history: rewrite thumbnail/preview/avatar paths to absolute URLs.
@@ -314,6 +332,47 @@ struct Video: Decodable, Identifiable, Hashable {
             federatedHost: mediaHost ?? indexHost,
             cacheHost: mediaHost
         )?.absoluteString
+    }
+
+    /// Fills in view count, channel avatars, and/or thumbnail from an origin-instance detail fetch
+    /// (fediverse-trending rows arrive from the hot API without view/avatar data, and with a
+    /// thumbnail served only by the index host). Existing values are preserved when the enrichment
+    /// doesn't supply a replacement.
+    func withEnrichedMetadata(views newViews: Int?, avatars newAvatars: [ActorImage]?, thumbnailPath newThumbnail: String? = nil) -> Video {
+        let resolvedViews = newViews ?? views
+        let resolvedAvatars = (newAvatars?.isEmpty == false) ? newAvatars : channel?.avatars
+        let trimmedThumbnail = newThumbnail?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedThumbnail = (trimmedThumbnail?.isEmpty == false ? trimmedThumbnail : nil) ?? thumbnailPath
+        let ch = channel
+        let newChannel = VideoChannelSummary(
+            id: ch?.id,
+            name: ch?.name,
+            displayName: ch?.displayName,
+            url: ch?.url,
+            host: ch?.host,
+            avatars: resolvedAvatars
+        )
+        return Video(
+            id: id,
+            uuid: uuid,
+            name: name,
+            description: description,
+            duration: duration,
+            views: resolvedViews,
+            likes: likes,
+            dislikes: dislikes,
+            createdAt: createdAt,
+            publishedAt: publishedAt,
+            thumbnailPath: resolvedThumbnail,
+            previewPath: previewPath,
+            embedPath: embedPath,
+            channel: newChannel,
+            account: account,
+            privacy: privacy,
+            streamingPlaylists: streamingPlaylists,
+            files: files,
+            commentReadHost: commentReadHost
+        )
     }
 
     /// Fills in channel avatars (e.g. after loading plugin random-video rows that omit them).

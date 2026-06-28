@@ -76,7 +76,7 @@ final class HomeViewModel: ObservableObject {
     /// Broad privacy/`include` on global `/videos` — only for admin/moderator on most instances.
     private var includeAllPrivacy = false
     private var fediverseHotLoaded = false
-    private var fediverseAvatarEnrichmentInFlight = Set<String>()
+    private var fediverseRowEnrichmentInFlight = Set<String>()
 
     init() {
         if let saved = UserDefaults.standard.string(forKey: Self.sortDefaultsKey),
@@ -222,19 +222,34 @@ final class HomeViewModel: ObservableObject {
         }
     }
 
-    /// Lazily loads a channel avatar for one trending row (rate-limited; avoids 429 on peertube.watch).
-    func enrichFediverseAvatar(for videoId: String) async {
+    /// Lazily loads the view count, channel avatar, and a working thumbnail for one trending row
+    /// from its origin instance (the hot API omits views/avatars and serves thumbnails only from
+    /// the index host). The media origin is tried first: it is authoritative and distinct per
+    /// video, so requests fan out across hosts instead of all funneling through the index host.
+    func enrichFediverseRow(for videoId: String) async {
         guard currentListScope == .fediverseTrending,
-              let index = videos.firstIndex(where: { $0.stableId == videoId }),
-              videos[index].channel?.avatars?.isEmpty != false,
-              let readHost = videos[index].commentReadHost,
-              fediverseAvatarEnrichmentInFlight.insert(videoId).inserted else { return }
-        defer { fediverseAvatarEnrichmentInFlight.remove(videoId) }
-
-        guard let avatars = await PeerTubeOriginClients.fetchChannelAvatars(videoId: videoId, host: readHost) else {
-            return
+              let index = videos.firstIndex(where: { $0.stableId == videoId }) else { return }
+        let needsAvatar = videos[index].channel?.avatars?.isEmpty != false
+        let needsViews = videos[index].views == nil
+        // Media origin first (fan-out + authoritative), index host (commentReadHost) as fallback.
+        let hosts = [videos[index].originHost, videos[index].commentReadHost].compactMap { host -> String? in
+            let trimmed = host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
         }
-        guard index < videos.count, videos[index].stableId == videoId else { return }
-        videos[index] = videos[index].withChannelAvatars(avatars)
+        guard needsAvatar || needsViews,
+              !hosts.isEmpty,
+              fediverseRowEnrichmentInFlight.insert(videoId).inserted else { return }
+        defer { fediverseRowEnrichmentInFlight.remove(videoId) }
+
+        let meta = await PeerTubeOriginClients.fetchVideoMetadata(videoId: videoId, hosts: hosts)
+        guard meta.views != nil || meta.avatars != nil || meta.thumbnailURL != nil else { return }
+        // Re-find the row after the await: a feed reload may have replaced the array, but as long
+        // as the same video is still present we can apply the fetched data (avoids a wasted fetch).
+        guard let freshIndex = videos.firstIndex(where: { $0.stableId == videoId }) else { return }
+        videos[freshIndex] = videos[freshIndex].withEnrichedMetadata(
+            views: meta.views,
+            avatars: meta.avatars,
+            thumbnailPath: meta.thumbnailURL
+        )
     }
 }
