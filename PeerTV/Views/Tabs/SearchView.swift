@@ -159,6 +159,7 @@ struct SearchView: View {
                             )
                         }
                         .buttonStyle(.card)
+                        .videoTilePlaylistPicker(video: video, showOriginHost: vm.mode == .global)
                         .focused($searchGridFocusVideoId, equals: video.stableId)
                         .id(searchCellScrollId(videoId: video.stableId))
                         .simultaneousGesture(

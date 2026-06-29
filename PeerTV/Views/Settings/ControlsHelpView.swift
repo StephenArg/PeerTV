@@ -14,7 +14,7 @@ struct ControlsHelpView: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .firstTextBaseline, spacing: 20) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Controls")
@@ -42,12 +42,12 @@ struct ControlsHelpView: View {
             }
 
             sectionHeader("Browsing")
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                 ForEach(browsingTips) { controlRow($0) }
             }
 
             sectionHeader("Player")
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                 ForEach(playerTips) { controlRow($0) }
             }
 
@@ -82,7 +82,7 @@ struct ControlsHelpView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, 8)
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
@@ -101,6 +101,11 @@ struct ControlsHelpView: View {
             icon: "info.circle.fill",
             title: "Open video details",
             detail: "Press and hold a video tile to open its details instead of playing."
+        ),
+        ControlTip(
+            icon: "text.badge.plus",
+            title: "Add to a playlist",
+            detail: "Double‑click the play/pause button while a video tile is focused to save it to a playlist."
         )
     ]
 
@@ -126,9 +131,14 @@ struct ControlsHelpView: View {
             detail: "Double‑click the play/pause button to bring up the quick selector bar."
         ),
         ControlTip(
-            icon: "forward.frame.fill",
-            title: "Skim faster",
-            detail: "Hold left or right on the scrubber to skim; keep holding to skim faster."
+            icon: "goforward.10",
+            title: "Jump forward / backward",
+            detail: "Press left or right on the remote to skip backward or forward by 10 seconds."
+        ),
+        ControlTip(
+            icon: "hand.draw.fill",
+            title: "Skim video",
+            detail: "While paused, swipe left or right on the touchpad to move the scrubber pointer, then click to jump to that spot."
         )
     ]
 }

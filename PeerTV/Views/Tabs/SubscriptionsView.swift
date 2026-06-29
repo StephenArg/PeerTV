@@ -68,6 +68,7 @@ struct SubscriptionsView: View {
                             VideoCardView(video: video)
                         }
                         .buttonStyle(.card)
+                        .videoTilePlaylistPicker(video: video)
                         .simultaneousGesture(
                             LongPressGesture(minimumDuration: 0.5)
                                 .onEnded { _ in

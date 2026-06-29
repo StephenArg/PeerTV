@@ -42,6 +42,10 @@ struct MainTabView: View {
                 .tabItem { Label("History", systemImage: "clock") }
                 .tag(MainTabSelection.history)
 
+            SettingsTab()
+                .tabItem { Label("Settings", systemImage: "gear") }
+                .tag(MainTabSelection.settings)
+
             if !isAnonymous {
                 SubscriptionsTab()
                     .tabItem { Label("Subscriptions", systemImage: "bell") }
@@ -51,10 +55,6 @@ struct MainTabView: View {
                     .tabItem { Label("Channels", systemImage: "person.2") }
                     .tag(MainTabSelection.channels)
             }
-
-            SettingsTab()
-                .tabItem { Label("Settings", systemImage: "gear") }
-                .tag(MainTabSelection.settings)
         }
         .onChange(of: session.isAnonymous) { _, anonymous in
             if anonymous, selectedTab != .home, selectedTab != .history, selectedTab != .settings {

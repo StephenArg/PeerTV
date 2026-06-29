@@ -52,6 +52,7 @@ struct HistoryView: View {
                             )
                         }
                         .buttonStyle(.card)
+                        .videoTilePlaylistPicker(video: video, showOriginHost: session.isAnonymous)
                         .simultaneousGesture(
                             LongPressGesture(minimumDuration: 0.5)
                                 .onEnded { _ in

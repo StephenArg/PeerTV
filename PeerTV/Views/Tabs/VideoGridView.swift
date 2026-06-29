@@ -153,6 +153,7 @@ struct VideoGridView: View {
                                 )
                             }
                             .buttonStyle(.card)
+                            .videoTilePlaylistPicker(video: video, showOriginHost: isFediverseTrending)
                             .focused($homeGridFocusVideoId, equals: video.stableId)
                             .id(homeCellScrollId(videoId: video.stableId))
                             .simultaneousGesture(
@@ -578,6 +579,60 @@ struct VideoCardView: View {
         }
         .font(.caption2)
         .foregroundStyle(.tertiary)
+    }
+}
+
+// MARK: - Video tile playlist picker (double-press play/pause)
+
+private let videoTilePlaylistDoublePressWindow: TimeInterval = 0.4
+
+/// Wraps a focusable video-tile button so `.onPlayPauseCommand` is delivered to the button,
+/// not its label (SwiftUI does not route remote commands into Button labels on tvOS).
+private struct VideoTilePlaylistPickerHost<Content: View>: View {
+    @EnvironmentObject var session: SessionStore
+    let video: Video
+    let showOriginHost: Bool
+    @ViewBuilder let content: () -> Content
+
+    @StateObject private var playlistPickerVM = PlaylistPickerViewModel()
+    @State private var showPlaylistPicker = false
+    @State private var lastPlayPausePress: Date?
+
+    private var canAddToPlaylist: Bool {
+        !session.isAnonymous
+            && session.tokenStore.accessToken != nil
+            && !showOriginHost
+            && video.id != nil
+    }
+
+    var body: some View {
+        content()
+            .onPlayPauseCommand {
+                guard canAddToPlaylist else { return }
+                let now = Date()
+                if let last = lastPlayPausePress, now.timeIntervalSince(last) < videoTilePlaylistDoublePressWindow {
+                    lastPlayPausePress = nil
+                    playlistPickerVM.configure(
+                        apiClient: session.apiClient,
+                        accountName: session.username.isEmpty ? nil : session.username,
+                        numericVideoId: video.id
+                    )
+                    showPlaylistPicker = true
+                } else {
+                    lastPlayPausePress = now
+                }
+            }
+            .sheet(isPresented: $showPlaylistPicker) {
+                PlaylistPickerView(vm: playlistPickerVM)
+            }
+    }
+}
+
+extension View {
+    func videoTilePlaylistPicker(video: Video, showOriginHost: Bool = false) -> some View {
+        VideoTilePlaylistPickerHost(video: video, showOriginHost: showOriginHost) {
+            self
+        }
     }
 }
 

@@ -352,6 +352,7 @@ struct PlaylistDetailView: View {
                                             VideoCardView(video: video)
                                         }
                                         .buttonStyle(.card)
+                                        .videoTilePlaylistPicker(video: video)
                                         .focused($playlistPlayFocusVideoId, equals: video.stableId)
                                         .simultaneousGesture(
                                             LongPressGesture(minimumDuration: 0.5)
