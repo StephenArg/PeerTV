@@ -205,7 +205,12 @@ final class DownloadManager: NSObject, ObservableObject {
         guard activeDownloads[videoId] == nil else { return }
         guard !isDownloaded(videoId) else { return }
 
-        let directURLString = file.fileDownloadUrl ?? file.fileUrl
+        // Prefer the static `fileUrl` over `fileDownloadUrl`. On default PeerTube nginx configs
+        // the `/download/...` route (fileDownloadUrl) is proxied through the Node backend and hard
+        // rate-limited (`proxy_limit_rate 5M`), while the static `/static/web-videos/...` file
+        // (fileUrl) only has `limit_rate_after 5M` per connection. Using the static path avoids the
+        // proxy bottleneck and roughly matches HLS playback throughput.
+        let directURLString = file.fileUrl ?? file.fileDownloadUrl
         let hlsPlaylistString = file.playlistUrl
         // For HLS export fallback, prefer the master playlist over the per-resolution variant;
         // AVAssetExportSession needs the master manifest to load segments correctly.
@@ -1185,21 +1190,22 @@ extension DownloadManager: URLSessionDownloadDelegate {
             guard let self else { return }
             guard let videoId = self.taskVideoIdMap[taskId] else { return }
             guard var progress = self.activeDownloads[videoId] else { return }
+            guard var tracker = self.speedTrackers[taskId] else { return }
 
+            // URLSession fires this callback dozens–hundreds of times per second at multi-MB/s.
+            // Publishing `activeDownloads` every time invalidates every SwiftUI view observing the
+            // manager, which lags the UI and steals main-thread time from the download. Throttle UI
+            // updates to ~0.4s; the completion handler always sets the final state, so skipping the
+            // intermediate callbacks is safe.
             let now = Date()
-            var speed: Double = 0
-            if var tracker = self.speedTrackers[taskId] {
-                let elapsed = now.timeIntervalSince(tracker.lastTime)
-                if elapsed > 0.5 {
-                    let bytesDelta = totalBytesWritten - tracker.lastBytes
-                    speed = Double(bytesDelta) / elapsed
-                    tracker.lastBytes = totalBytesWritten
-                    tracker.lastTime = now
-                    self.speedTrackers[taskId] = tracker
-                } else {
-                    speed = progress.bytesPerSecond
-                }
-            }
+            let elapsed = now.timeIntervalSince(tracker.lastTime)
+            guard elapsed >= 0.4 else { return }
+
+            let bytesDelta = totalBytesWritten - tracker.lastBytes
+            let speed = elapsed > 0 ? Double(bytesDelta) / elapsed : progress.bytesPerSecond
+            tracker.lastBytes = totalBytesWritten
+            tracker.lastTime = now
+            self.speedTrackers[taskId] = tracker
 
             progress.receivedBytes = totalBytesWritten
             let currentTotal = progress.totalBytes
