@@ -27,12 +27,6 @@ struct MainTabView: View {
                 .tag(MainTabSelection.home)
 
             if !isAnonymous {
-                if shuffleEnabled {
-                    ShuffleTab()
-                        .tabItem { Label("Shuffle", systemImage: "shuffle") }
-                        .tag(MainTabSelection.shuffle)
-                }
-
                 PlaylistsTab()
                     .tabItem { Label("Playlists", systemImage: "list.and.film") }
                     .tag(MainTabSelection.playlists)
@@ -47,6 +41,12 @@ struct MainTabView: View {
                 .tag(MainTabSelection.settings)
 
             if !isAnonymous {
+                if shuffleEnabled {
+                    ShuffleTab()
+                        .tabItem { Label("Shuffle", systemImage: "shuffle") }
+                        .tag(MainTabSelection.shuffle)
+                }
+
                 SubscriptionsTab()
                     .tabItem { Label("Subscriptions", systemImage: "bell") }
                     .tag(MainTabSelection.subscriptions)

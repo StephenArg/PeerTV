@@ -59,6 +59,7 @@
 		C68FA32F30E6ECA50F217955 /* VideoPlaylist.swift in Sources */ = {isa = PBXBuildFile; fileRef = 942FE90E12B0B47F1E47A3B2 /* VideoPlaylist.swift */; };
 		CC11223344556677AABB0001 /* ShuffleViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11223344556677AABB0002 /* ShuffleViewModel.swift */; };
 		CC99001122334455AA66BB02 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC99001122334455AA66BB01 /* AppTheme.swift */; };
+		CH11223344556677AABB0002 /* ControlsHelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CH11223344556677AABB0001 /* ControlsHelpView.swift */; };
 		CO11223344556677AABB0001 /* CaptionOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CO11223344556677AABB0002 /* CaptionOverlayView.swift */; };
 		D465A444AB99F93D4FBC639D /* ThumbnailURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08E2476F69BB53E8D572601B /* ThumbnailURL.swift */; };
 		DBF17753E6C492D03CEFBDF6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 487CD46A4F75DFE6C3DE79FD /* Assets.xcassets */; };
@@ -67,7 +68,6 @@
 		DD33001122334455AA66BB02 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD33001122334455AA66BB01 /* DownloadManager.swift */; };
 		DD44001122334455AA66BB02 /* VideoDownloadBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD44001122334455AA66BB01 /* VideoDownloadBar.swift */; };
 		DD55001122334455AA66BB02 /* DownloadedVideosView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD55001122334455AA66BB01 /* DownloadedVideosView.swift */; };
-		CH11223344556677AABB0002 /* ControlsHelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CH11223344556677AABB0001 /* ControlsHelpView.swift */; };
 		DD77001122334455AA66BB02 /* VideoDownloadQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD77001122334455AA66BB01 /* VideoDownloadQuality.swift */; };
 		E3B76692C2EE5B0978E49FD4 /* SubscriptionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 216F76B265C16AAECE2543BE /* SubscriptionsView.swift */; };
 		E4E8FF097E3B21BEA2671184 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97F3CAA913F542F02F4F5391 /* SessionStore.swift */; };
@@ -150,6 +150,7 @@
 		C1B94BCF6FE05590AA24FC42 /* OAuthModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthModels.swift; sourceTree = "<group>"; };
 		CC11223344556677AABB0002 /* ShuffleViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShuffleViewModel.swift; sourceTree = "<group>"; };
 		CC99001122334455AA66BB01 /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
+		CH11223344556677AABB0001 /* ControlsHelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlsHelpView.swift; sourceTree = "<group>"; };
 		CO11223344556677AABB0002 /* CaptionOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionOverlayView.swift; sourceTree = "<group>"; };
 		D66767032F845D53006685FB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		D6BA5EF17722A7D480F817B6 /* TokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenStore.swift; sourceTree = "<group>"; };
@@ -159,7 +160,6 @@
 		DD33001122334455AA66BB01 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
 		DD44001122334455AA66BB01 /* VideoDownloadBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDownloadBar.swift; sourceTree = "<group>"; };
 		DD55001122334455AA66BB01 /* DownloadedVideosView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadedVideosView.swift; sourceTree = "<group>"; };
-		CH11223344556677AABB0001 /* ControlsHelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlsHelpView.swift; sourceTree = "<group>"; };
 		DD581DC9AD1A608D9FA1A601 /* HomeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeViewModel.swift; sourceTree = "<group>"; };
 		DD77001122334455AA66BB01 /* VideoDownloadQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDownloadQuality.swift; sourceTree = "<group>"; };
 		E6D85C474ED072C451CC3385 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -584,7 +584,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = R6WYB662P7;
 				INFOPLIST_FILE = PeerTV/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PeerTV;
@@ -595,7 +595,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9;
+				MARKETING_VERSION = 1.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.verofide.PeerTV;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -641,7 +641,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 10;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = R6WYB662P7;
 				INFOPLIST_FILE = PeerTV/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PeerTV;
@@ -652,7 +652,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9;
+				MARKETING_VERSION = 1.10;
 				PRODUCT_BUNDLE_IDENTIFIER = com.verofide.PeerTV;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
