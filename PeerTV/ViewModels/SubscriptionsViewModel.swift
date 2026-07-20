@@ -44,6 +44,12 @@ final class SubscriptionsViewModel: ObservableObject {
         }
     }
 
+    /// First load only — avoids wiping scroll position when the view reappears (e.g. after closing the player).
+    func loadInitialIfEmpty() async {
+        guard feedVideos.isEmpty else { return }
+        await loadInitial()
+    }
+
     func loadMoreFeed() async {
         guard let apiClient, !isLoading, canLoadMoreFeed else { return }
         isLoading = true

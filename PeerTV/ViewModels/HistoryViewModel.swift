@@ -26,6 +26,12 @@ final class HistoryViewModel: ObservableObject {
         await loadMore()
     }
 
+    /// First load only — avoids wiping scroll position when the view reappears (e.g. after closing the player).
+    func loadInitialIfEmpty() async {
+        guard videos.isEmpty else { return }
+        await loadInitial()
+    }
+
     func loadMore() async {
         guard let apiClient, !isLoading, canLoadMore else { return }
         isLoading = true
