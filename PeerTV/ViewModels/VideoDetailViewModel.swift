@@ -9,6 +9,9 @@ final class VideoDetailViewModel: ObservableObject {
 
     @Published var userRating: String = "none"
 
+    @Published var isDeleting = false
+    @Published var deleteError: String?
+
     @Published var comments: [VideoComment] = []
     /// Replies loaded per thread via `GET …/comment-threads/{threadId}` (list often omits them).
     @Published private(set) var threadReplySupplements: [VideoComment] = []
@@ -208,6 +211,29 @@ final class VideoDetailViewModel: ObservableObject {
         if old == "dislike" { video?.dislikes = (video?.dislikes ?? 1) - 1 }
         if new == "like" { video?.likes = (video?.likes ?? 0) + 1 }
         if new == "dislike" { video?.dislikes = (video?.dislikes ?? 0) + 1 }
+    }
+
+    // MARK: - Delete
+
+    /// Deletes the video using the given authenticated client (owner or admin on the home instance).
+    /// Prefer the video's UUID so federation-stable ids resolve on the owner's host.
+    @discardableResult
+    func deleteVideo(using client: PeerTubeAPIClient, videoId: String) async -> Bool {
+        let trimmed = videoId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            deleteError = "Missing video id."
+            return false
+        }
+        isDeleting = true
+        deleteError = nil
+        defer { isDeleting = false }
+        do {
+            _ = try await client.rawRequest(.deleteVideo(id: trimmed))
+            return true
+        } catch {
+            deleteError = error.localizedDescription
+            return false
+        }
     }
 
     // MARK: - Comments

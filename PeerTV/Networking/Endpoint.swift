@@ -20,6 +20,7 @@ enum Endpoint {
     // Videos
     case videos(sort: String, start: Int, count: Int, includeAllPrivacy: Bool = false, isLocal: Bool? = nil)
     case videoDetail(id: String)
+    case deleteVideo(id: String)
     case videoFileToken(id: String)
     case videoStoryboards(id: String)
     case videoCaptions(id: String)
@@ -86,7 +87,7 @@ enum Endpoint {
             return "/api/v1/users/token"
         case .videos:
             return "/api/v1/videos"
-        case .videoDetail(let id):
+        case .videoDetail(let id), .deleteVideo(let id):
             return "/api/v1/videos/\(id)"
         case .videoFileToken(let id):
             return "/api/v1/videos/\(id)/token"
@@ -215,7 +216,7 @@ enum Endpoint {
             return "POST"
         case .rateVideo, .watchVideo:
             return "PUT"
-        case .unsubscribe, .removePlaylistElement, .deletePlaylist:
+        case .unsubscribe, .removePlaylistElement, .deletePlaylist, .deleteVideo:
             return "DELETE"
         default:
             return "GET"
@@ -250,6 +251,7 @@ enum Endpoint {
         case .mySubscriptions, .mySubscriptionVideos, .myHistory, .usersMe,
              .myVideoRating, .rateVideo, .addVideoToPlaylist,
              .removePlaylistElement, .reorderPlaylistVideos, .deletePlaylist,
+             .deleteVideo,
              .videosExistInPlaylists,
              .subscriptionExist, .subscribe, .unsubscribe,
              .watchVideo, .videoFileToken, .postVideoComment:

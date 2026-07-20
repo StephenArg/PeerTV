@@ -2,6 +2,7 @@ import SwiftUI
 
 struct VideoDetailView: View {
     @EnvironmentObject var session: SessionStore
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var vm: VideoDetailViewModel
     @StateObject private var playlistPickerVM = PlaylistPickerViewModel()
     @State private var showDebugJSON = false
@@ -9,6 +10,9 @@ struct VideoDetailView: View {
     @State private var descriptionExpanded = false
     @State private var savedPosition: TimeInterval?
     @State private var showAnonymousRestriction = false
+    @State private var deletionGrant: VideoDeletionGrant?
+    @State private var showDeleteConfirm = false
+    @State private var showDeleteError = false
 
     private let originHost: String?
     private let commentReadHost: String?
@@ -200,13 +204,32 @@ struct VideoDetailView: View {
                                 .accessibilityHint(descriptionExpanded ? "Collapses the description" : "Expands the full description")
                             }
 
-                            Divider().padding(.vertical, 4)
+                            if (DebugFlags.showAPIExplorer && DebugFlags.showVideoDetailRawJSON)
+                                || deletionGrant != nil {
+                                Divider().padding(.vertical, 4)
 
-                            if DebugFlags.showAPIExplorer && DebugFlags.showVideoDetailRawJSON {
-                                Button("Show Raw JSON") {
-                                    showDebugJSON = true
+                                HStack(spacing: 24) {
+                                    if DebugFlags.showAPIExplorer && DebugFlags.showVideoDetailRawJSON {
+                                        Button("Show Raw JSON") {
+                                            showDebugJSON = true
+                                        }
+                                        .font(.caption)
+                                    }
+
+                                    if deletionGrant != nil {
+                                        Button {
+                                            showDeleteConfirm = true
+                                        } label: {
+                                            if vm.isDeleting {
+                                                ProgressView()
+                                            } else {
+                                                Text("Delete")
+                                            }
+                                        }
+                                        .font(.caption)
+                                        .disabled(vm.isDeleting)
+                                    }
                                 }
-                                .font(.caption)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -238,6 +261,21 @@ struct VideoDetailView: View {
         .sheet(isPresented: $showPlaylistPicker) {
             PlaylistPickerView(vm: playlistPickerVM)
         }
+        .confirmationDialog(
+            "Delete this video? This cannot be undone.",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                Task { await performDelete() }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Could not delete video", isPresented: $showDeleteError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(vm.deleteError ?? "Unknown error.")
+        }
         .task {
             let client = detailAPIClient
             let federated = vm.usesFederatedOrigin
@@ -261,6 +299,11 @@ struct VideoDetailView: View {
             )
             refreshSavedPosition()
             await vm.load()
+            if let video = vm.video {
+                deletionGrant = await session.resolveVideoDeletionGrant(for: video)
+            } else {
+                deletionGrant = nil
+            }
             if !federated, session.tokenStore.accessToken != nil {
                 await vm.loadUserRating()
             }
@@ -366,6 +409,18 @@ struct VideoDetailView: View {
             savedPosition = PlaybackPositionStore.position(for: vm.videoId, accountId: accountId)
         } else {
             savedPosition = nil
+        }
+    }
+
+    private func performDelete() async {
+        guard let grant = deletionGrant else { return }
+        let uuid = vm.video?.uuid?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let videoId = (uuid?.isEmpty == false) ? (uuid ?? vm.videoId) : vm.videoId
+        let ok = await vm.deleteVideo(using: grant.client, videoId: videoId)
+        if ok {
+            dismiss()
+        } else {
+            showDeleteError = true
         }
     }
 

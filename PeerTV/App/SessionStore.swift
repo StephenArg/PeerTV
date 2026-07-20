@@ -2,6 +2,12 @@ import Foundation
 import Combine
 import os
 
+/// Credentials + handle for deleting a video on its home instance.
+struct VideoDeletionGrant {
+    let client: PeerTubeAPIClient
+    let accountHandle: String
+}
+
 /// Centralized session state that drives the root navigation.
 @MainActor
 final class SessionStore: ObservableObject, AccountLoginHost {
@@ -44,6 +50,9 @@ final class SessionStore: ObservableObject, AccountLoginHost {
     private(set) var apiClient: PeerTubeAPIClient
     private(set) var oauthService: OAuthService
 
+    /// Cached admin/moderator status per account id (from `users/me`).
+    private var adminOrModeratorCache: [UUID: Bool] = [:]
+
     /// Accounts sorted for Settings (most recently used first).
     var sortedAccounts: [AccountRecord] {
         accounts.sorted { $0.lastUsedAt > $1.lastUsedAt }
@@ -61,13 +70,20 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         guard !key.isEmpty else { return nil }
         for account in accounts {
             guard account.host.lowercased() == key else { continue }
-            let store = TokenStore(accountId: account.id)
-            guard store.accessToken != nil else { continue }
-            let client = PeerTubeAPIClient(tokenStore: store)
-            client.baseURL = account.baseURL
-            return client
+            if let client = authenticatedClient(for: account) {
+                return client
+            }
         }
         return nil
+    }
+
+    /// Authenticated API client for a specific saved account, if tokens are present.
+    func authenticatedClient(for account: AccountRecord) -> PeerTubeAPIClient? {
+        let store = TokenStore(accountId: account.id)
+        guard store.accessToken != nil else { return nil }
+        let client = PeerTubeAPIClient(tokenStore: store)
+        client.baseURL = account.baseURL
+        return client
     }
 
     /// One client per host, in `hosts` order (skips hosts without a signed-in account).
@@ -82,6 +98,60 @@ final class SessionStore: ObservableObject, AccountLoginHost {
             }
         }
         return clients
+    }
+
+    /// Returns a deletion grant when one of the signed-in accounts owns the video or is
+    /// an admin/moderator on the video's home instance.
+    func resolveVideoDeletionGrant(for video: Video) async -> VideoDeletionGrant? {
+        let ownerName = video.account?.name?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        let ownerHost = video.account?.host?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        guard !ownerName.isEmpty, !ownerHost.isEmpty else { return nil }
+
+        // Prefer an exact owner match (no network).
+        for account in accounts {
+            let accountHost = account.host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let accountUser = account.username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard accountHost == ownerHost, accountUser == ownerName else { continue }
+            guard let client = authenticatedClient(for: account) else { continue }
+            return VideoDeletionGrant(client: client, accountHandle: account.handle)
+        }
+
+        // Same-host admin/moderator can also delete.
+        for account in accounts {
+            let accountHost = account.host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard accountHost == ownerHost else { continue }
+            guard let client = authenticatedClient(for: account) else { continue }
+            let isStaff = await isAdministratorOrModerator(account: account, client: client)
+            if isStaff {
+                return VideoDeletionGrant(client: client, accountHandle: account.handle)
+            }
+        }
+
+        return nil
+    }
+
+    private func isAdministratorOrModerator(account: AccountRecord, client: PeerTubeAPIClient) async -> Bool {
+        if let cached = adminOrModeratorCache[account.id] {
+            return cached
+        }
+        if account.id == activeAccountId, let role = userRole {
+            let staff = role.isAdministratorOrModerator
+            adminOrModeratorCache[account.id] = staff
+            return staff
+        }
+        do {
+            let user: UserMe = try await client.request(.usersMe)
+            let staff = user.role?.isAdministratorOrModerator == true
+            adminOrModeratorCache[account.id] = staff
+            return staff
+        } catch {
+            Self.log.error("isAdministratorOrModerator failed for \(account.handle, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return false
+        }
     }
 
     /// Accounts (excluding `activeAccountId`) that still have tokens — for “use another account” on the login screen.
@@ -317,6 +387,7 @@ final class SessionStore: ObservableObject, AccountLoginHost {
     func invalidateSession() {
         if let id = activeAccountId {
             TokenStore.deleteAllTokens(for: id)
+            adminOrModeratorCache.removeValue(forKey: id)
         } else {
             tokenStore.clear()
         }
@@ -426,6 +497,7 @@ final class SessionStore: ObservableObject, AccountLoginHost {
     func signOut(accountId: UUID) {
         TokenStore.deleteAllTokens(for: accountId)
         accounts = accounts.filter { $0.id != accountId }
+        adminOrModeratorCache.removeValue(forKey: accountId)
         persistAccounts()
 
         let wasActive = activeAccountId == accountId
@@ -488,6 +560,9 @@ final class SessionStore: ObservableObject, AccountLoginHost {
     private func applyUserMe(_ user: UserMe) {
         username = user.username
         userRole = user.role
+        if let active = activeAccountId {
+            adminOrModeratorCache[active] = user.role?.isAdministratorOrModerator == true
+        }
         guard let active = activeAccountId,
               let idx = accounts.firstIndex(where: { $0.id == active }) else { return }
         var rows = accounts
