@@ -11,6 +11,7 @@ struct VideoGridView: View {
     @State private var showSortDialog = false
     @State private var showScopeDialog = false
     @State private var showFediverseLanguagePicker = false
+    @State private var showCategoryPicker = false
     @State private var didLongPress = false
     /// False when another tab is selected so we do not scroll/focus the home grid when the player dismisses from elsewhere.
     @State private var isHomeGridOnScreen = false
@@ -78,6 +79,23 @@ struct VideoGridView: View {
                                     HStack(spacing: 20) {
                                         Image(systemName: "globe")
                                         Text("Platforms")
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.72)
+                                    }
+                                    .font(.callout)
+                                    .padding(.horizontal, 48)
+                                    .padding(.vertical, 12)
+                                }
+                                .buttonStyle(.card)
+                            }
+
+                            if !session.isAnonymous, vm.showsCategoryControls {
+                                Button {
+                                    showCategoryPicker = true
+                                } label: {
+                                    HStack(spacing: 20) {
+                                        Image(systemName: "folder")
+                                        Text(vm.categoryButtonTitle)
                                             .lineLimit(1)
                                             .minimumScaleFactor(0.72)
                                     }
@@ -220,6 +238,16 @@ struct VideoGridView: View {
                 Task { await vm.applyFediverseLanguages(selection) }
             }
         }
+        .sheet(isPresented: $showCategoryPicker) {
+            VideoCategoryPickerView(
+                categories: vm.categoryMenuItems,
+                initialSelection: Set(vm.selectedCategoryIds)
+            ) { selection in
+                Task { @MainActor in
+                    await vm.applyCategories(selection)
+                }
+            }
+        }
         .confirmationDialog(
             "Sort by",
             isPresented: $showSortDialog,
@@ -255,6 +283,7 @@ struct VideoGridView: View {
             if session.isAnonymous {
                 await vm.loadAnonymousFediverseHome()
             } else {
+                await vm.refreshCategoryMenuItems()
                 await vm.loadInitialIfEmpty()
             }
         }
@@ -317,6 +346,23 @@ struct CardThumbnailFocusOverlay: View {
         )
         .opacity(isFocused ? 1 : 0)
         .animation(CardFocusStyle.animation, value: isFocused)
+        .allowsHitTesting(false)
+    }
+}
+
+/// Thin resume-progress bar pinned to the bottom edge of a video thumbnail.
+private struct ThumbnailWatchProgressBar: View {
+    let fraction: Double
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Color.black.opacity(0.45)
+                Color.white
+                    .frame(width: geo.size.width * fraction)
+            }
+        }
+        .frame(height: 3)
         .allowsHitTesting(false)
     }
 }
@@ -439,6 +485,7 @@ struct VideoCardView: View {
     @Environment(\.isFocused) var isFocused
     @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var showPreviewControls = false
+    @State private var watchProgressFraction: Double?
     let video: Video
     var showOriginHost: Bool = false
     /// When set (e.g. anonymous history), use this URL directly instead of re-resolving paths.
@@ -474,6 +521,12 @@ struct VideoCardView: View {
                             PreviewControlHints()
                                 .padding(8)
                                 .transition(.opacity)
+                        }
+                    }
+                    .overlay(alignment: .bottom) {
+                        if ThumbnailProgressBarSettings.isVisible,
+                           let fraction = watchProgressFraction {
+                            ThumbnailWatchProgressBar(fraction: fraction)
                         }
                     }
 
@@ -525,6 +578,26 @@ struct VideoCardView: View {
             .padding(.bottom, 8)
             .frame(height: 120, alignment: .top)
         }
+        .onAppear { refreshWatchProgress() }
+        .onReceive(NotificationCenter.default.publisher(for: .peerTVPlayerDismissed)) { note in
+            if let dismissedId = note.userInfo?["videoId"] as? String,
+               dismissedId != video.stableId {
+                return
+            }
+            refreshWatchProgress()
+        }
+    }
+
+    private func refreshWatchProgress() {
+        guard let accountId = session.playbackAccountId else {
+            watchProgressFraction = nil
+            return
+        }
+        watchProgressFraction = PlaybackPositionStore.progressFraction(
+            for: video.stableId,
+            accountId: accountId,
+            durationSeconds: video.duration
+        )
     }
 
     private func cardThumbnailURL(path: String?) -> URL? {

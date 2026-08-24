@@ -6,9 +6,12 @@ struct SubscriptionsView: View {
     @State private var detailVideoId: String = ""
     @State private var showDetail = false
     @State private var didLongPress = false
-    /// False when another tab is selected so we do not scroll/focus this grid when the player dismisses from elsewhere.
+    /// False while another screen covers this grid (e.g. UIKit player) so we can defer focus restore to `onAppear`.
     @State private var isSubscriptionsGridOnScreen = false
+    @State private var pendingFocusVideoId: String?
     @FocusState private var subscriptionsGridFocusVideoId: String?
+    /// When a channel (or other destination) is pushed on the navigation stack, the feed grid is not visible.
+    var isAtNavigationRoot: Bool = true
 
     private let columns = [
         GridItem(.adaptive(minimum: 380, maximum: 480), spacing: 30)
@@ -70,7 +73,7 @@ struct SubscriptionsView: View {
                                     videoId: video.stableId,
                                     apiClient: session.apiClient,
                                     accessToken: session.tokenStore.accessToken,
-                                    accountId: session.activeAccountId
+                                    accountId: session.playbackAccountId
                                 )
                             } label: {
                                 VideoCardView(video: video)
@@ -104,16 +107,19 @@ struct SubscriptionsView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .peerTVPlayerDismissed)) { note in
-                guard isSubscriptionsGridOnScreen else { return }
+                guard isAtNavigationRoot else { return }
+                guard !showDetail else { return }
                 guard let id = note.userInfo?["videoId"] as? String else { return }
                 guard vm.feedVideos.contains(where: { $0.stableId == id }) else { return }
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 200_000_000)
-                    subscriptionsGridFocusVideoId = id
-                    withAnimation(.easeOut(duration: 0.25)) {
-                        scrollProxy.scrollTo(subscriptionsCellScrollId(videoId: id), anchor: .center)
-                    }
-                }
+                pendingFocusVideoId = id
+                restoreSubscriptionsGridFocus(using: scrollProxy)
+            }
+            .onAppear {
+                isSubscriptionsGridOnScreen = true
+                restoreSubscriptionsGridFocus(using: scrollProxy)
+            }
+            .onDisappear {
+                isSubscriptionsGridOnScreen = false
             }
         }
         .overlay {
@@ -129,11 +135,21 @@ struct SubscriptionsView: View {
         .navigationDestination(isPresented: $showDetail) {
             VideoDetailView(videoId: detailVideoId)
         }
-        .onAppear { isSubscriptionsGridOnScreen = true }
-        .onDisappear { isSubscriptionsGridOnScreen = false }
         .task {
             vm.configure(apiClient: session.apiClient)
             await vm.loadInitialIfEmpty()
+        }
+    }
+
+    private func restoreSubscriptionsGridFocus(using scrollProxy: ScrollViewProxy) {
+        guard isSubscriptionsGridOnScreen, let id = pendingFocusVideoId else { return }
+        pendingFocusVideoId = nil
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            subscriptionsGridFocusVideoId = id
+            withAnimation(.easeOut(duration: 0.25)) {
+                scrollProxy.scrollTo(subscriptionsCellScrollId(videoId: id), anchor: .center)
+            }
         }
     }
 }

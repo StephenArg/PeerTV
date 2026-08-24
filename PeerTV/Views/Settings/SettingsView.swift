@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var savedPositionCount = PlaybackPositionStore.savedPositionCount
     @State private var resumePlaybackEnabled = PlaybackPositionStore.isEnabled
     @State private var tilePreviewEnabled = TilePreviewSettings.isEnabled
+    @State private var showThumbnailProgressBars = ThumbnailProgressBarSettings.isVisible
     // Persisted via the same `UserDefaults` key read by `PlayerSettings.bufferCap` so playback
     // code and the Settings picker stay in sync across launches.
     @AppStorage(PlayerSettings.bufferCapKey) private var bufferCapRawValue: Int = BufferCap.gb1.rawValue
@@ -75,6 +76,9 @@ struct SettingsView: View {
 
                     Toggle("Preview thumbnails on focus", isOn: $tilePreviewEnabled)
                     Text("When a video is highlighted, its tile cycles through preview frames (the same thumbnails shown when scrubbing). Turn off to always show a single static thumbnail.")
+
+                    Toggle("Show progress on thumbnails", isOn: $showThumbnailProgressBars)
+                    Text("Partially watched videos show a thin progress bar at the bottom of their thumbnail.")
                 }
 
                 settingsSection(title: "Accounts") {
@@ -249,12 +253,16 @@ struct SettingsView: View {
         .onChange(of: tilePreviewEnabled) { _, newValue in
             TilePreviewSettings.isEnabled = newValue
         }
+        .onChange(of: showThumbnailProgressBars) { _, newValue in
+            ThumbnailProgressBarSettings.isVisible = newValue
+        }
     }
 
     private func refreshPlaybackSettings() {
         showVideoDetailRawJSON = DebugFlags.showVideoDetailRawJSON
         resumePlaybackEnabled = PlaybackPositionStore.isEnabled
         tilePreviewEnabled = TilePreviewSettings.isEnabled
+        showThumbnailProgressBars = ThumbnailProgressBarSettings.isVisible
         if session.isAnonymous {
             savedPositionCount = PlaybackPositionStore.savedPositionCount(
                 for: PlaybackPositionStore.anonymousAccountId

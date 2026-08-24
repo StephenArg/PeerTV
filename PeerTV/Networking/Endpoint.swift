@@ -18,7 +18,8 @@ enum Endpoint {
     case usersToken
 
     // Videos
-    case videos(sort: String, start: Int, count: Int, includeAllPrivacy: Bool = false, isLocal: Bool? = nil)
+    case videos(sort: String, start: Int, count: Int, includeAllPrivacy: Bool = false, isLocal: Bool? = nil, categoryIds: [Int] = [])
+    case videoCategories
     case videoDetail(id: String)
     case deleteVideo(id: String)
     case videoFileToken(id: String)
@@ -87,6 +88,8 @@ enum Endpoint {
             return "/api/v1/users/token"
         case .videos:
             return "/api/v1/videos"
+        case .videoCategories:
+            return "/api/v1/videos/categories"
         case .videoDetail(let id), .deleteVideo(let id):
             return "/api/v1/videos/\(id)"
         case .videoFileToken(let id):
@@ -158,10 +161,13 @@ enum Endpoint {
 
     var queryItems: [URLQueryItem] {
         switch self {
-        case .videos(let sort, let start, let count, let includeAllPrivacy, let isLocal):
+        case .videos(let sort, let start, let count, let includeAllPrivacy, let isLocal, let categoryIds):
             var items = paging(start: start, count: count) + [URLQueryItem(name: "sort", value: sort)]
             if includeAllPrivacy { items.append(contentsOf: allPrivacyItems()) }
             if let isLocal { items.append(URLQueryItem(name: "isLocal", value: isLocal ? "true" : "false")) }
+            for id in categoryIds {
+                items.append(URLQueryItem(name: "categoryOneOf", value: "\(id)"))
+            }
             return items
         case .videoChannels(let start, let count):
             return paging(start: start, count: count)
@@ -287,9 +293,9 @@ extension Endpoint {
     /// Short label for Unified Logging (paths + non-sensitive parameters only).
     var networkLogDescription: String {
         switch self {
-        case .videos(let sort, let start, let count, let includeAllPrivacy, let isLocal):
+        case .videos(let sort, let start, let count, let includeAllPrivacy, let isLocal, let categoryIds):
             let scope = isLocal.map { $0 ? "local" : "remote" } ?? "all"
-            return "GET /api/v1/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy) scope=\(scope)"
+            return "GET /api/v1/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy) scope=\(scope) categories=\(categoryIds.count)"
         case .channelVideos(let handle, let start, let count, let sort, let includeAllPrivacy):
             return "GET …/video-channels/\(handle)/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy)"
         case .searchVideos(let search, let start, let count, let scope):

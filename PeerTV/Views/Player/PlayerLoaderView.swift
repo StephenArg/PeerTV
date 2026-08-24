@@ -975,9 +975,6 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             }
             let pickerVM = PlaylistPickerViewModel()
             pickerVM.configure(apiClient: apiClient, accountName: name, numericVideoId: numericVideoId)
-            pickerVM.onFeedback = { [weak self] message in
-                self?.transportBar?.showSpeedNotification(message)
-            }
             let host = UIHostingController(rootView: PlaylistPickerView(vm: pickerVM))
             host.modalPresentationStyle = .overFullScreen
             // Let the SwiftUI picker's own background fill the screen (it draws a dark backdrop);

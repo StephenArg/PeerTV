@@ -319,14 +319,6 @@ struct VideoDetailView: View {
         .onAppear {
             refreshSavedPosition()
         }
-        .onChange(of: playlistPickerVM.playlistMessage) { message in
-            if let message {
-                Task {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    playlistPickerVM.playlistMessage = nil
-                }
-            }
-        }
         .anonymousRestrictionAlert(isPresented: $showAnonymousRestriction) {
             session.exitAnonymousToLogin()
         }
@@ -494,16 +486,15 @@ struct VideoDetailView: View {
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity)
-        .overlay(alignment: .bottom) {
-            if let message = playlistPickerVM.playlistMessage {
-                playlistToastBanner(message: message)
-            }
-        }
-        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: playlistPickerVM.playlistMessage)
     }
+}
 
-    @ViewBuilder
-    private func playlistToastBanner(message: String) -> some View {
+// MARK: - Playlist Picker
+
+private struct PlaylistPickerToastBanner: View {
+    let message: String
+
+    var body: some View {
         let isSuccess = message == PlaylistPickerViewModel.addedMessage
             || message == PlaylistPickerViewModel.removedMessage
         HStack(alignment: .center, spacing: 12) {
@@ -528,11 +519,8 @@ struct VideoDetailView: View {
         .shadow(color: .black.opacity(0.45), radius: 16, y: 8)
         .padding(.horizontal, 8)
         .transition(.move(edge: .bottom).combined(with: .opacity))
-        .offset(y: 56)
     }
 }
-
-// MARK: - Playlist Picker
 
 struct PlaylistPickerView: View {
     @ObservedObject var vm: PlaylistPickerViewModel
@@ -634,6 +622,21 @@ struct PlaylistPickerView: View {
         // Fills the screen with a dark backdrop. Needed when presented over the player (an
         // over-full-screen host with a clear background); harmless behind the detail-screen sheet.
         .background(Color.black.opacity(0.9).ignoresSafeArea())
+        .overlay(alignment: .bottom) {
+            if let message = vm.playlistMessage {
+                PlaylistPickerToastBanner(message: message)
+                    .padding(.bottom, 48)
+            }
+        }
+        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: vm.playlistMessage)
+        .onChange(of: vm.playlistMessage) { _, message in
+            if message != nil {
+                Task {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    vm.playlistMessage = nil
+                }
+            }
+        }
         .task {
             await vm.loadMyPlaylists()
         }

@@ -37,6 +37,17 @@ enum PlaybackPositionStore {
         return dict[key]
     }
 
+    /// Returns watch progress as a fraction of total duration (0...1) for thumbnail display.
+    /// Returns nil when resume is disabled, duration is unknown, or the position is not resumable.
+    static func progressFraction(for videoId: String, accountId: UUID, durationSeconds: Int?) -> Double? {
+        guard let duration = durationSeconds, duration > 0 else { return nil }
+        let stored = position(for: videoId, accountId: accountId)
+        guard let effective = effectiveResumePosition(stored: stored, durationSeconds: duration) else {
+            return nil
+        }
+        return min(1, max(0, effective / TimeInterval(duration)))
+    }
+
     /// Returns a resume time only when it is not in the opening or closing window of the video.
     /// When `durationSeconds` is nil or non‑positive, returns `stored` unchanged (caller has no duration yet).
     static func effectiveResumePosition(stored: TimeInterval?, durationSeconds: Int?) -> TimeInterval? {

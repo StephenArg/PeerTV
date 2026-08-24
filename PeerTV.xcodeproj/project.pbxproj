@@ -81,6 +81,8 @@
 		FE8363543BB6E0DFF7C64DC6 /* VideoDetailViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 951214025156C5E7E1755033 /* VideoDetailViewModel.swift */; };
 		FEDLANGBB000000000000001 /* FediverseHotLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEDLANGAA000000000000001 /* FediverseHotLanguage.swift */; };
 		FEDPICKBB000000000000001 /* FediverseLanguagePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEDPICKAA000000000000001 /* FediverseLanguagePickerView.swift */; };
+		CATMDLBB000000000000001 /* VideoCategory.swift in Sources */ = {isa = PBXBuildFile; fileRef = CATMDLAA000000000000001 /* VideoCategory.swift */; };
+		CATPICKBB000000000000001 /* VideoCategoryPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CATPICKAA000000000000001 /* VideoCategoryPickerView.swift */; };
 		FF11223344556677AABB0001 /* SearchViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF11223344556677AABB0002 /* SearchViewModel.swift */; };
 		FF22334455667788AABB0001 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF22334455667788AABB0002 /* SearchView.swift */; };
 		FF33445555667788AABB0001 /* PeerTubeOriginClients.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF33445555667788AABB0002 /* PeerTubeOriginClients.swift */; };
@@ -174,6 +176,8 @@
 		FD930FB67E78919F51B313DD /* PlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerView.swift; sourceTree = "<group>"; };
 		FEDLANGAA000000000000001 /* FediverseHotLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FediverseHotLanguage.swift; sourceTree = "<group>"; };
 		FEDPICKAA000000000000001 /* FediverseLanguagePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FediverseLanguagePickerView.swift; sourceTree = "<group>"; };
+		CATMDLAA000000000000001 /* VideoCategory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCategory.swift; sourceTree = "<group>"; };
+		CATPICKAA000000000000001 /* VideoCategoryPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCategoryPickerView.swift; sourceTree = "<group>"; };
 		FF11223344556677AABB0002 /* SearchViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchViewModel.swift; sourceTree = "<group>"; };
 		FF22334455667788AABB0002 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		FF33445555667788AABB0002 /* PeerTubeOriginClients.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerTubeOriginClients.swift; sourceTree = "<group>"; };
@@ -246,6 +250,7 @@
 				216F76B265C16AAECE2543BE /* SubscriptionsView.swift */,
 				75E46EDE3001222FB67D18EF /* VideoGridView.swift */,
 				FEDPICKAA000000000000001 /* FediverseLanguagePickerView.swift */,
+				CATPICKAA000000000000001 /* VideoCategoryPickerView.swift */,
 			);
 			path = Tabs;
 			sourceTree = "<group>";
@@ -323,6 +328,7 @@
 				AA11223344556677AABB0002 /* RandomVideo.swift */,
 				AA33445566778899BB0002 /* FediverseHotVideo.swift */,
 				FEDLANGAA000000000000001 /* FediverseHotLanguage.swift */,
+				CATMDLAA000000000000001 /* VideoCategory.swift */,
 				SB33445566778899AABB0002 /* VideoStoryboard.swift */,
 				VC11223344556677AABB0002 /* VideoCaption.swift */,
 				2194DE259D2983B43AF741C1 /* Subscription.swift */,
@@ -564,6 +570,8 @@
 				AA33445566778899BB0001 /* FediverseHotVideo.swift in Sources */,
 				FEDLANGBB000000000000001 /* FediverseHotLanguage.swift in Sources */,
 				FEDPICKBB000000000000001 /* FediverseLanguagePickerView.swift in Sources */,
+				CATMDLBB000000000000001 /* VideoCategory.swift in Sources */,
+				CATPICKBB000000000000001 /* VideoCategoryPickerView.swift in Sources */,
 				SB33445566778899AABB0001 /* VideoStoryboard.swift in Sources */,
 				VC11223344556677AABB0001 /* VideoCaption.swift in Sources */,
 				CC11223344556677AABB0001 /* ShuffleViewModel.swift in Sources */,

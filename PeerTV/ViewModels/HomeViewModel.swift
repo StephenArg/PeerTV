@@ -64,6 +64,8 @@ final class HomeViewModel: ObservableObject {
     @Published var sort: String
     @Published var scope: String
     @Published private(set) var fediverseLanguageIds: [String] = []
+    @Published private(set) var categoryMenuItems: [VideoCategoryMenuItem] = []
+    @Published private(set) var selectedCategoryIds: [Int] = []
 
     private static let sortDefaultsKey = "PeerTV.homeVideoSort"
     private static let scopeDefaultsKey = "PeerTV.homeVideoScope"
@@ -92,10 +94,15 @@ final class HomeViewModel: ObservableObject {
             scope = HomeVideoScope.all.rawValue
         }
         fediverseLanguageIds = FediverseHotLanguage.loadSavedCodes()
+        selectedCategoryIds = HomeVideoCategoryFilter.loadSavedIds()
     }
 
     var fediverseLanguageButtonTitle: String {
         fediverseLanguageIds.isEmpty ? "Languages" : "Languages (\(fediverseLanguageIds.count))"
+    }
+
+    var categoryButtonTitle: String {
+        selectedCategoryIds.isEmpty ? "Categories" : "Categories (\(selectedCategoryIds.count))"
     }
 
     var currentListSort: HomeVideoListSort {
@@ -107,6 +114,10 @@ final class HomeViewModel: ObservableObject {
     }
 
     var showsSortControls: Bool {
+        currentListScope != .fediverseTrending
+    }
+
+    var showsCategoryControls: Bool {
         currentListScope != .fediverseTrending
     }
 
@@ -156,7 +167,8 @@ final class HomeViewModel: ObservableObject {
                     start: currentStart,
                     count: pageSize,
                     includeAllPrivacy: includeAllPrivacy,
-                    isLocal: currentListScope.isLocal
+                    isLocal: currentListScope.isLocal,
+                    categoryIds: selectedCategoryIds
                 )
             )
             total = response.total
@@ -183,6 +195,42 @@ final class HomeViewModel: ObservableObject {
         fediverseLanguageIds = ordered
         FediverseHotLanguage.saveCodes(ordered)
         guard currentListScope == .fediverseTrending else { return }
+        await loadInitial()
+    }
+
+    func refreshCategoryMenuItems() async {
+        guard let apiClient else { return }
+        do {
+            let dict: [String: String] = try await apiClient.request(.videoCategories)
+            let items: [VideoCategoryMenuItem] = dict.compactMap { key, label in
+                guard let id = Int(key) else { return nil }
+                let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+                let title = trimmed.isEmpty ? "Category \(id)" : trimmed
+                return VideoCategoryMenuItem(id: id, label: title)
+            }.sorted { $0.id < $1.id }
+            categoryMenuItems = items
+            let availableIds = items.map(\.id)
+            let filtered = HomeVideoCategoryFilter.orderedIds(
+                from: Set(selectedCategoryIds),
+                availableIds: availableIds
+            )
+            if filtered != selectedCategoryIds {
+                selectedCategoryIds = filtered
+                HomeVideoCategoryFilter.saveIds(filtered)
+            }
+        } catch {
+            Self.log.notice("refreshCategoryMenuItems failed: \(error.localizedDescription, privacy: .public)")
+            categoryMenuItems = []
+        }
+    }
+
+    func applyCategories(_ selection: Set<Int>) async {
+        let availableIds = categoryMenuItems.map(\.id)
+        let ordered = HomeVideoCategoryFilter.orderedIds(from: selection, availableIds: availableIds)
+        guard ordered != selectedCategoryIds else { return }
+        selectedCategoryIds = ordered
+        HomeVideoCategoryFilter.saveIds(ordered)
+        guard currentListScope != .fediverseTrending else { return }
         await loadInitial()
     }
 

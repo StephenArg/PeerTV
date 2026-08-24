@@ -64,6 +64,12 @@ final class ChannelDetailViewModel: ObservableObject {
         }
     }
 
+    /// First load only — avoids wiping scroll position when the view reappears (e.g. after closing the player).
+    func loadInitialIfEmpty() async {
+        guard channel == nil, videos.isEmpty else { return }
+        await loadChannel()
+    }
+
     func loadMoreVideos() async {
         guard let apiClient, !isLoading, canLoadMoreVideos else { return }
         isLoading = true

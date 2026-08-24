@@ -154,7 +154,7 @@ private struct SubscriptionsTab: View {
     @State private var path = NavigationPath()
     var body: some View {
         NavigationStack(path: $path) {
-            SubscriptionsView()
+            SubscriptionsView(isAtNavigationRoot: path.isEmpty)
                 .withSharedDestinations()
         }
     }

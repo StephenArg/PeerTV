@@ -60,6 +60,24 @@ struct StoryboardThumbnailProvider {
 
 // MARK: - Tile preview settings
 
+/// User preference for showing resume progress bars on video thumbnails.
+enum ThumbnailProgressBarSettings {
+    private static let visibleKey = "PeerTV.showThumbnailProgressBars"
+
+    /// Whether partially watched videos show a progress bar on their thumbnail. Defaults to true.
+    static var isVisible: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: visibleKey) == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: visibleKey)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: visibleKey)
+        }
+    }
+}
+
 /// User preference for cycling storyboard preview frames on a focused video tile.
 enum TilePreviewSettings {
     private static let enabledKey = "PeerTV.tilePreviewEnabled"
