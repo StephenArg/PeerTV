@@ -613,6 +613,7 @@ final class TransportBarOverlayView: UIView {
     let skipNextButton: UIButton
     let speedButton: UIButton
     let captionsButton: UIButton
+    let pictureInPictureButton: UIButton
     let addToPlaylistButton: UIButton
     let currentTimeLabel = UILabel()
     let remainingTimeLabel = UILabel()
@@ -638,6 +639,11 @@ final class TransportBarOverlayView: UIView {
     /// Shown when the video has at least one caption track (PeerTube).
     var showsCaptionsButton: Bool = false {
         didSet { captionsButton.isHidden = !showsCaptionsButton }
+    }
+
+    /// Shown when Picture in Picture is supported on this device.
+    var showsPictureInPictureButton: Bool = false {
+        didSet { pictureInPictureButton.isHidden = !showsPictureInPictureButton }
     }
 
     /// Shown when the user is signed in and the current video has a numeric id we can post.
@@ -678,6 +684,7 @@ final class TransportBarOverlayView: UIView {
         self.skipNextButton = Self.makeIconButton(symbol: "forward.end")
         self.speedButton = Self.makeIconButton(symbol: "gauge.with.dots.needle.67percent")
         self.captionsButton = Self.makeIconButton(symbol: "captions.bubble")
+        self.pictureInPictureButton = Self.makeIconButton(symbol: "pip.enter")
         self.addToPlaylistButton = Self.makeIconButton(symbol: "text.badge.plus")
         super.init(frame: frame)
         setup()
@@ -722,11 +729,14 @@ final class TransportBarOverlayView: UIView {
         buttonStack.addArrangedSubview(skipNextButton)
         buttonStack.addArrangedSubview(speedButton)
         buttonStack.addArrangedSubview(captionsButton)
+        buttonStack.addArrangedSubview(pictureInPictureButton)
         buttonStack.addArrangedSubview(addToPlaylistButton)
         skipNextButton.isHidden = true
         skipNextButton.accessibilityLabel = "Play next in playlist"
         captionsButton.isHidden = true
         captionsButton.accessibilityLabel = "Captions"
+        pictureInPictureButton.isHidden = true
+        pictureInPictureButton.accessibilityLabel = "Picture in Picture"
         addToPlaylistButton.isHidden = true
         addToPlaylistButton.accessibilityLabel = "Add to playlist"
         buttonStack.axis = .horizontal
@@ -1385,6 +1395,7 @@ final class TransportBarController: NSObject {
     private let onQualityTapped: () -> Void
     private let onSpeedTapped: () -> Void
     private let onCaptionsTapped: (() -> Void)?
+    private let onPictureInPictureTapped: (() -> Void)?
     private let onSkipNextTapped: (() -> Void)?
     private let onAddToPlaylistTapped: (() -> Void)?
     /// Invoked when the touchpad click (`.select`) is held past `holdBeforeSpeedToggle`.
@@ -1440,6 +1451,7 @@ final class TransportBarController: NSObject {
         onQualityTapped: @escaping () -> Void,
         onSpeedTapped: @escaping () -> Void,
         onCaptionsTapped: (() -> Void)? = nil,
+        onPictureInPictureTapped: (() -> Void)? = nil,
         onSkipNextTapped: (() -> Void)? = nil,
         onAddToPlaylistTapped: (() -> Void)? = nil,
         onSpeedHold: (() -> Void)? = nil,
@@ -1451,6 +1463,7 @@ final class TransportBarController: NSObject {
         self.onQualityTapped = onQualityTapped
         self.onSpeedTapped = onSpeedTapped
         self.onCaptionsTapped = onCaptionsTapped
+        self.onPictureInPictureTapped = onPictureInPictureTapped
         self.onSkipNextTapped = onSkipNextTapped
         self.onAddToPlaylistTapped = onAddToPlaylistTapped
         self.onSpeedHold = onSpeedHold
@@ -1466,6 +1479,7 @@ final class TransportBarController: NSObject {
         rootView.barView.qualityButton.addTarget(self, action: #selector(qualityPressed), for: .primaryActionTriggered)
         rootView.barView.speedButton.addTarget(self, action: #selector(speedPressed), for: .primaryActionTriggered)
         rootView.barView.captionsButton.addTarget(self, action: #selector(captionsPressed), for: .primaryActionTriggered)
+        rootView.barView.pictureInPictureButton.addTarget(self, action: #selector(pictureInPicturePressed), for: .primaryActionTriggered)
         rootView.barView.skipNextButton.addTarget(self, action: #selector(skipNextPressed), for: .primaryActionTriggered)
         rootView.barView.addToPlaylistButton.addTarget(self, action: #selector(addToPlaylistPressed), for: .primaryActionTriggered)
 
@@ -1494,6 +1508,10 @@ final class TransportBarController: NSObject {
 
     func setShowsCaptionsButton(_ show: Bool) {
         rootView.barView.showsCaptionsButton = show
+    }
+
+    func setShowsPictureInPictureButton(_ show: Bool) {
+        rootView.barView.showsPictureInPictureButton = show
     }
 
     func setShowsAddToPlaylistButton(_ show: Bool) {
@@ -1585,6 +1603,12 @@ final class TransportBarController: NSObject {
             items.append(.init(symbol: "captions.bubble", accessibilityLabel: "Captions") { [weak self] in
                 self?.hideQuickOptions()
                 self?.onCaptionsTapped?()
+            })
+        }
+        if bar.showsPictureInPictureButton {
+            items.append(.init(symbol: "pip.enter", accessibilityLabel: "Picture in Picture") { [weak self] in
+                self?.hideQuickOptions()
+                self?.onPictureInPictureTapped?()
             })
         }
         if bar.showsSkipNextButton {
@@ -2216,6 +2240,7 @@ final class TransportBarController: NSObject {
             || rootView.barView.skipNextButton.isFocused
             || rootView.barView.speedButton.isFocused
             || rootView.barView.captionsButton.isFocused
+            || rootView.barView.pictureInPictureButton.isFocused
             || rootView.barView.addToPlaylistButton.isFocused
     }
 
@@ -2494,6 +2519,12 @@ final class TransportBarController: NSObject {
         showBarAndResetTimer()
     }
 
+    @objc private func pictureInPicturePressed() {
+        print("[PiP] transport button pressed callback=\(onPictureInPictureTapped != nil)")
+        onPictureInPictureTapped?()
+        showBarAndResetTimer()
+    }
+
     @objc private func skipNextPressed() {
         onSkipNextTapped?()
         showBarAndResetTimer()
@@ -2734,6 +2765,22 @@ final class TransportBarController: NSObject {
 
 // MARK: - Player container
 
+/// `AVPlayerLayer` host used as the Picture in Picture source. On-screen video still comes from
+/// `AVPlayerViewController`; this layer sits behind it and shares the same `AVPlayer`.
+private final class PlayerLayerView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        playerLayer.videoGravity = .resizeAspect
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not implemented") }
+}
+
 /// Wraps `AVPlayerViewController` as a child view controller and hosts the transport bar
 /// overlay as a sibling. Doing this (rather than installing into `contentOverlayView`) is
 /// required on tvOS because AVKit does not reliably route focus to custom subviews of the
@@ -2743,11 +2790,33 @@ final class PlayerContainerViewController: UIViewController {
 
     private let playerViewController: AVPlayerViewController
     private let overlayRoot: TransportBarRootView
+    private let pipSourceView = PlayerLayerView()
+
+    /// Layer `AVPictureInPictureController` samples. It shares the full-screen player's `AVPlayer`.
+    var pipSourceLayer: AVPlayerLayer { pipSourceView.playerLayer }
+
+    func setPictureInPicturePlayer(_ player: AVPlayer?) {
+        pipSourceView.playerLayer.player = player
+    }
+
+    /// AVKit only reports Picture in Picture as possible when the source layer is visible, so
+    /// it moves above `AVPlayerViewController`'s view (still below captions and the overlay)
+    /// while PiP starts, and goes back behind it once full-screen playback resumes.
+    func setPictureInPictureSourceInFront(_ inFront: Bool) {
+        guard isViewLoaded else { return }
+        if inFront {
+            view.insertSubview(pipSourceView, aboveSubview: playerViewController.view)
+        } else {
+            view.insertSubview(pipSourceView, belowSubview: playerViewController.view)
+        }
+    }
 
     /// Sits above the video and below the transport overlay so captions stay readable.
     let captionOverlay = CaptionOverlayView()
 
-    /// Called after the container begins dismissing, once per lifecycle.
+    /// Called when the container is dismissed. Stays set across a Picture in Picture dismiss
+    /// and a later restore so the real close still reaches the coordinator. Cleanup itself
+    /// runs once; the coordinator guards that.
     var onDismissed: (() -> Void)?
 
     /// Asked whether a Menu/Back press should be swallowed by the overlay (e.g. cancelling a
@@ -2779,6 +2848,15 @@ final class PlayerContainerViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
+
+        pipSourceView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(pipSourceView)
+        NSLayoutConstraint.activate([
+            pipSourceView.topAnchor.constraint(equalTo: view.topAnchor),
+            pipSourceView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            pipSourceView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            pipSourceView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
 
         addChild(playerViewController)
         playerViewController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -2858,11 +2936,16 @@ final class PlayerContainerViewController: UIViewController {
         super.dismiss(animated: flag, completion: completion)
     }
 
+    /// Leaves the full-screen player without consulting the transport bar's Menu veto.
+    /// Picture in Picture calls this after the corner window has taken over playback.
+    func dismissForPictureInPicture(animated: Bool = true) {
+        super.dismiss(animated: animated)
+    }
+
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         if isBeingDismissed || isMovingFromParent {
             onDismissed?()
-            onDismissed = nil
         }
     }
 }

@@ -149,6 +149,69 @@ final class HomeViewModel: ObservableObject {
         await loadInitial()
     }
 
+    /// Refetches the list without clearing it first, so scroll position and focus survive when the
+    /// same videos come back. On failure the existing rows are kept.
+    func refreshInPlace() async {
+        guard !videos.isEmpty else {
+            await loadInitial()
+            return
+        }
+        guard !isLoading else { return }
+
+        if currentListScope == .fediverseTrending {
+            isLoading = true
+            defer { isLoading = false }
+            do {
+                let loaded = try await FediverseHotVideosResponse.fetchVideos(languageIds: fediverseLanguageIds)
+                videos = carryingOverEnrichment(into: loaded)
+                fediverseHotLoaded = true
+                total = loaded.count
+                currentStart = loaded.count
+            } catch {
+                Self.log.notice("refreshInPlace fediverse failed error=\(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
+
+        guard let apiClient else { return }
+        isLoading = true
+        defer { isLoading = false }
+        // Refetch as many rows as are already loaded (API max 100) so a deep scroll position still exists.
+        let count = min(max(pageSize, videos.count), 100)
+        do {
+            let response: PaginatedResponse<Video> = try await apiClient.request(
+                .videos(
+                    sort: sort,
+                    start: 0,
+                    count: count,
+                    includeAllPrivacy: includeAllPrivacy,
+                    isLocal: currentListScope.isLocal,
+                    categoryIds: selectedCategoryIds
+                )
+            )
+            var seen = Set<String>()
+            videos = response.items.filter { seen.insert($0.stableId).inserted }
+            total = response.total
+            currentStart = response.items.count
+            errorMessage = nil
+        } catch {
+            Self.log.notice("refreshInPlace failed sort=\(self.sort, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Rows already on screen won't re-trigger `enrichFediverseRow`, so keep what they already fetched.
+    private func carryingOverEnrichment(into loaded: [Video]) -> [Video] {
+        let previous = Dictionary(videos.map { ($0.stableId, $0) }, uniquingKeysWith: { first, _ in first })
+        return loaded.map { video in
+            guard let old = previous[video.stableId] else { return video }
+            return video.withEnrichedMetadata(
+                views: video.views ?? old.views,
+                avatars: old.channel?.avatars,
+                thumbnailPath: old.thumbnailPath
+            )
+        }
+    }
+
     func loadMore() async {
         if currentListScope == .fediverseTrending {
             await loadFediverseHotIfNeeded()

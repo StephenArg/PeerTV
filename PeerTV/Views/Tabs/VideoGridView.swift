@@ -2,7 +2,9 @@ import SwiftUI
 
 struct VideoGridView: View {
     @EnvironmentObject var session: SessionStore
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var vm = HomeViewModel()
+    @State private var wasBackgrounded = false
     @State private var detailVideoId: String = ""
     @State private var detailOriginHost: String?
     @State private var detailCommentReadHost: String?
@@ -299,6 +301,18 @@ struct VideoGridView: View {
                 includeAllPrivacy: session.useBroadHomeVideoListing
             )
             Task { await vm.loadInitial() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                wasBackgrounded = true
+            case .active where wasBackgrounded:
+                // tvOS resumes a suspended process instead of relaunching, so `.task` does not rerun.
+                wasBackgrounded = false
+                Task { await vm.refreshInPlace() }
+            default:
+                break
+            }
         }
     }
 }

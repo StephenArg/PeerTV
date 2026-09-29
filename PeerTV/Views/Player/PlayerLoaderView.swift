@@ -34,6 +34,9 @@ final class PlayerPresenter {
 
     private var isPresenting = false
     private var loadingOverlay: UIView?
+    /// Full-screen player dismissed into Picture in Picture. Retained so playback,
+    /// progress reporting, and restore survive without a presented controller.
+    private var pictureInPictureSession: (coordinator: PlayerCoordinator, container: PlayerContainerViewController)?
 
     func play(
         videoId: String,
@@ -45,6 +48,10 @@ final class PlayerPresenter {
         historyTileThumbnailURL: URL? = nil,
         historyTileChannelAvatarURL: URL? = nil
     ) {
+        if let session = pictureInPictureSession {
+            pictureInPictureSession = nil
+            session.coordinator.stopPictureInPictureAndCleanup()
+        }
         guard !isPresenting else { return }
         isPresenting = true
 
@@ -333,6 +340,8 @@ final class PlayerPresenter {
         playerVC.player = player
         playerVC.modalPresentationStyle = .fullScreen
         playerVC.playbackControlsIncludeTransportBar = false
+        // PiP runs from the container's own AVPlayerLayer; keep AVKit's built-in PiP from claiming the player.
+        playerVC.allowsPictureInPicturePlayback = false
         if TransportBarConfiguration.requiresHidingAllSystemPlaybackControls {
             playerVC.showsPlaybackControls = false
         }
@@ -366,6 +375,7 @@ final class PlayerPresenter {
         )
         coordinator.containerController = container
         coordinator.wireCaptionOverlay(using: container)
+        coordinator.configurePictureInPicture(using: container)
         container.onDismissed = { [weak coordinator] in
             coordinator?.performDismissCleanup()
         }
@@ -386,6 +396,25 @@ final class PlayerPresenter {
         presenter.present(container, animated: true) {
             PlaybackLog.log.notice("AVPlayerViewController on-screen videoId=\(videoId, privacy: .public)")
         }
+    }
+
+    func beginPictureInPictureSession(coordinator: PlayerCoordinator, container: PlayerContainerViewController) {
+        pictureInPictureSession = (coordinator, container)
+        isPresenting = false
+    }
+
+    func releasePictureInPictureSession(matching coordinator: PlayerCoordinator) {
+        guard pictureInPictureSession?.coordinator === coordinator else { return }
+        pictureInPictureSession = nil
+    }
+
+    func notePictureInPictureRestoredToFullScreen() {
+        isPresenting = true
+    }
+
+    func topViewControllerForPictureInPictureRestore() -> UIViewController? {
+        guard let root = Self.keyWindow?.rootViewController else { return nil }
+        return Self.topViewController(from: root)
     }
 
     // MARK: - Loading overlay
@@ -455,7 +484,7 @@ private enum AssociatedKeys {
 
 /// Manages resolution/speed menus and dismissal for a UIKit-modally-presented
 /// AVPlayerViewController. Single Menu press dismisses everything.
-final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
+final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictureInPictureControllerDelegate {
     weak var player: AVPlayer?
     weak var controller: AVPlayerViewController?
     weak var containerController: UIViewController?
@@ -493,6 +522,16 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private var progressTimeObserver: Any?
     private let isLocalDownload: Bool
     private var transportBar: TransportBarController?
+    private var pictureInPictureController: AVPictureInPictureController?
+    private var isInPictureInPicture = false
+    /// Set when a resolution or playlist swap replaces `AVPlayer` while PiP is up.
+    /// The next PiP stop is that swap, not the user closing the window, so playback
+    /// stays up and PiP is restarted if the system dropped it.
+    private var resumePictureInPictureAfterPlayerSwap = false
+    private var pictureInPicturePossibleObservation: NSKeyValueObservation?
+    /// Pending start that waits for `isPictureInPicturePossible` after the source layer is handed the video.
+    private var pendingPictureInPictureStart: DispatchWorkItem?
+    private static let pictureInPictureStartTimeout: TimeInterval = 3
     private var title: String
     private weak var playlistPickerHost: UIViewController?
     private var captions: [PeerTubeCaption] = []
@@ -501,7 +540,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
     private var pendingResumeAt: TimeInterval?
     private var hasStartedInitialPlayback = false
 
-    private static let speeds: [Float] = [2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
+    private static let speeds: [Float] = [3.0, 2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
     private static let watchReportInterval: Double = 30
 
     init(resolutions: [ResolutionOption], autoURL: URL, initialLabel: String, accessToken: String?,
@@ -552,6 +591,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
             onQualityTapped: { [weak self] in self?.presentQualityMenu() },
             onSpeedTapped: { [weak self] in self?.presentSpeedMenu() },
             onCaptionsTapped: { [weak self] in self?.presentCaptionsMenu() },
+            onPictureInPictureTapped: { [weak self] in self?.startPictureInPicture() },
             onSkipNextTapped: { [weak self] in self?.userRequestedSkipToNextPlaylistItem() },
             onAddToPlaylistTapped: { [weak self] in self?.presentAddToPlaylistMenu() },
             onSpeedHold: { [weak self] in self?.toggleSpeedHold() },
@@ -1125,8 +1165,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
 
             let newPlayer = AVPlayer(playerItem: newItem)
             newPlayer.automaticallyWaitsToMinimizeStalling = true
-            self.player = newPlayer
-            controller.player = newPlayer
+            adoptPlayer(newPlayer, controller: controller)
             transportBar?.attach(player: newPlayer)
 
             endObserver = NotificationCenter.default.addObserver(
@@ -1216,6 +1255,160 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         PlaybackPositionStore.remove(videoId: videoId, accountId: accountId)
     }
 
+    // MARK: Picture in Picture
+
+    func configurePictureInPicture(using container: PlayerContainerViewController) {
+        let supported = AVPictureInPictureController.isPictureInPictureSupported()
+        guard supported, let player else {
+            transportBar?.setShowsPictureInPictureButton(false)
+            logPictureInPicture("configure skipped supported=\(supported) player=\(self.player != nil)")
+            return
+        }
+        container.setPictureInPicturePlayer(player)
+        guard pictureInPictureController == nil else {
+            transportBar?.setShowsPictureInPictureButton(true)
+            logPictureInPicture("configure reused controller \(pictureInPictureStateSummary())")
+            return
+        }
+        let pip = AVPictureInPictureController(contentSource: .init(playerLayer: container.pipSourceLayer))
+        pip.delegate = self
+        pictureInPictureController = pip
+        pictureInPicturePossibleObservation = pip.observe(\.isPictureInPicturePossible, options: [.new]) { [weak self] _, change in
+            DispatchQueue.main.async {
+                self?.pictureInPicturePossibleChanged(change.newValue ?? false)
+            }
+        }
+        transportBar?.setShowsPictureInPictureButton(true)
+        logPictureInPicture("configure created controller \(pictureInPictureStateSummary())")
+    }
+
+    private func startPictureInPicture() {
+        logPictureInPicture("start requested \(pictureInPictureStateSummary())")
+        guard let pictureInPictureController else {
+            logPictureInPicture("start aborted: no controller")
+            return
+        }
+        guard !pictureInPictureController.isPictureInPictureActive, pendingPictureInPictureStart == nil else {
+            logPictureInPicture("start aborted: already active or starting")
+            return
+        }
+        handVideoToPictureInPictureSource()
+        if pictureInPictureController.isPictureInPicturePossible {
+            beginPictureInPicture()
+            return
+        }
+        logPictureInPicture("waiting for isPictureInPicturePossible after handing video to source layer")
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingPictureInPictureStart = nil
+            self.logPictureInPicture("start timed out; restoring full-screen player \(self.pictureInPictureStateSummary())")
+            self.returnVideoToFullScreenPlayer()
+        }
+        pendingPictureInPictureStart = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pictureInPictureStartTimeout, execute: timeout)
+    }
+
+    private func pictureInPicturePossibleChanged(_ possible: Bool) {
+        logPictureInPicture("isPictureInPicturePossible changed to \(possible)")
+        guard possible, pendingPictureInPictureStart != nil else { return }
+        beginPictureInPicture()
+    }
+
+    private func beginPictureInPicture() {
+        pendingPictureInPictureStart?.cancel()
+        pendingPictureInPictureStart = nil
+        pictureInPictureController?.startPictureInPicture()
+        logPictureInPicture("startPictureInPicture() called \(pictureInPictureStateSummary())")
+    }
+
+    /// Detaches the player from `AVPlayerViewController` so the PiP source layer owns the video
+    /// and is visible. AVKit keeps `isPictureInPicturePossible` false while the video is
+    /// rendered by another view on top of the source layer.
+    private func handVideoToPictureInPictureSource() {
+        let container = containerController as? PlayerContainerViewController
+        container?.setPictureInPictureSourceInFront(true)
+        let playbackRate = player?.rate ?? 0
+        controller?.player = nil
+        if playbackRate > 0 {
+            player?.rate = playbackRate
+        }
+    }
+
+    private func returnVideoToFullScreenPlayer() {
+        (containerController as? PlayerContainerViewController)?.setPictureInPictureSourceInFront(false)
+        let playbackRate = player?.rate ?? 0
+        reattachFullScreenPlayerIfNeeded()
+        if playbackRate > 0 {
+            player?.rate = playbackRate
+        }
+    }
+
+    private func logPictureInPicture(_ message: String) {
+        PlaybackLog.log.notice("[PiP] \(message, privacy: .public)")
+    }
+
+    private func pictureInPictureStateSummary() -> String {
+        let pip = pictureInPictureController
+        let layer = (containerController as? PlayerContainerViewController)?.pipSourceLayer
+        let itemStatus: String = {
+            switch player?.currentItem?.status {
+            case .readyToPlay: return "ready"
+            case .failed: return "failed \(player?.currentItem?.error?.localizedDescription ?? "")"
+            case .unknown: return "unknown"
+            default: return "nil"
+            }
+        }()
+        let bounds = layer?.bounds ?? .zero
+        return "supported=\(AVPictureInPictureController.isPictureInPictureSupported()) possible=\(pip?.isPictureInPicturePossible ?? false) active=\(pip?.isPictureInPictureActive ?? false) controller=\(pip != nil) rate=\(player?.rate ?? -1) item=\(itemStatus) layerInHierarchy=\(layer?.superlayer != nil) layerBounds=\(Int(bounds.width))x\(Int(bounds.height)) layerReady=\(layer?.isReadyForDisplay ?? false) samePlayer=\(layer?.player === player) vcPlayer=\(controller?.player != nil)"
+    }
+
+    /// Stops the corner window and runs the normal end-of-playback cleanup.
+    /// Used when the user starts a different video while one is still in Picture in Picture.
+    func stopPictureInPictureAndCleanup() {
+        isInPictureInPicture = false
+        resumePictureInPictureAfterPlayerSwap = false
+        pendingPictureInPictureStart?.cancel()
+        pendingPictureInPictureStart = nil
+        pictureInPicturePossibleObservation = nil
+        let pip = pictureInPictureController
+        pictureInPictureController = nil
+        pip?.delegate = nil
+        pip?.stopPictureInPicture()
+        let container = containerController
+        performDismissCleanup()
+        if container?.presentingViewController != nil {
+            (container as? PlayerContainerViewController)?.dismissForPictureInPicture(animated: false)
+        }
+    }
+
+    /// Installs `newPlayer` on the full-screen controller and the PiP source layer.
+    /// While Picture in Picture is active the full-screen controller is off-screen and
+    /// must not take the player — assigning it there pauses playback.
+    private func adoptPlayer(_ newPlayer: AVPlayer, controller: AVPlayerViewController) {
+        player = newPlayer
+        if isInPictureInPicture {
+            notePictureInPicturePlayerReplaced()
+        } else {
+            controller.player = newPlayer
+        }
+        (containerController as? PlayerContainerViewController)?.setPictureInPicturePlayer(newPlayer)
+    }
+
+    private func notePictureInPicturePlayerReplaced() {
+        resumePictureInPictureAfterPlayerSwap = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.resumePictureInPictureAfterPlayerSwap else { return }
+            if self.pictureInPictureController?.isPictureInPictureActive == true {
+                self.resumePictureInPictureAfterPlayerSwap = false
+            }
+        }
+    }
+
+    private func reattachFullScreenPlayerIfNeeded() {
+        guard let player, controller?.player !== player else { return }
+        controller?.player = player
+    }
+
     // MARK: Delegate
 
     func playerViewControllerShouldDismiss(_ playerViewController: AVPlayerViewController) -> Bool {
@@ -1231,7 +1424,103 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         performDismissCleanup()
     }
 
+    func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        logPictureInPicture("willStart \(pictureInPictureStateSummary())")
+    }
+
+    func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        logPictureInPicture("didStart \(pictureInPictureStateSummary())")
+        isInPictureInPicture = true
+        resumePictureInPictureAfterPlayerSwap = false
+        // AVPlayerViewController pauses its player when its view leaves the window.
+        // Detach first so the shared player keeps running in the corner window.
+        let playbackRate = player?.rate ?? 0
+        controller?.player = nil
+        if playbackRate > 0 {
+            player?.rate = playbackRate
+        }
+        guard let container = containerController as? PlayerContainerViewController else { return }
+        MainActor.assumeIsolated {
+            PlayerPresenter.shared.beginPictureInPictureSession(coordinator: self, container: container)
+        }
+        if container.viewIfLoaded?.window != nil || container.presentingViewController != nil {
+            container.dismissForPictureInPicture()
+        }
+    }
+
+    func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+    ) {
+        logPictureInPicture("restore requested \(pictureInPictureStateSummary())")
+        guard let container = containerController else {
+            logPictureInPicture("restore failed: no container")
+            completionHandler(false)
+            return
+        }
+        returnVideoToFullScreenPlayer()
+        if container.viewIfLoaded?.window != nil || container.presentingViewController != nil {
+            MainActor.assumeIsolated {
+                PlayerPresenter.shared.notePictureInPictureRestoredToFullScreen()
+            }
+            completionHandler(true)
+            return
+        }
+        let presenter: UIViewController? = MainActor.assumeIsolated {
+            PlayerPresenter.shared.topViewControllerForPictureInPictureRestore()
+        }
+        guard let presenter, presenter !== container else {
+            logPictureInPicture("restore failed: no presenter")
+            completionHandler(false)
+            return
+        }
+        MainActor.assumeIsolated {
+            PlayerPresenter.shared.notePictureInPictureRestoredToFullScreen()
+        }
+        presenter.present(container, animated: true) {
+            completionHandler(true)
+        }
+    }
+
+    func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        logPictureInPicture("didStop swapResume=\(resumePictureInPictureAfterPlayerSwap) \(pictureInPictureStateSummary())")
+        if resumePictureInPictureAfterPlayerSwap {
+            resumePictureInPictureAfterPlayerSwap = false
+            isInPictureInPicture = false
+            // Don't call start from inside the stop callback; AVKit ignores it.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.didCallDismiss else { return }
+                self.pictureInPictureController?.startPictureInPicture()
+            }
+            return
+        }
+        let onScreen = containerController?.viewIfLoaded?.window != nil
+            || containerController?.presentingViewController != nil
+        isInPictureInPicture = false
+        if onScreen {
+            returnVideoToFullScreenPlayer()
+        } else {
+            pictureInPicturePossibleObservation = nil
+            self.pictureInPictureController?.delegate = nil
+            self.pictureInPictureController = nil
+            performDismissCleanup()
+        }
+        MainActor.assumeIsolated {
+            PlayerPresenter.shared.releasePictureInPictureSession(matching: self)
+        }
+    }
+
+    func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        failedToStartPictureInPictureWithError error: Error
+    ) {
+        let ns = error as NSError
+        logPictureInPicture("failedToStart domain=\(ns.domain) code=\(ns.code) \(ns.localizedDescription) \(pictureInPictureStateSummary())")
+        returnVideoToFullScreenPlayer()
+    }
+
     func performDismissCleanup() {
+        guard !isInPictureInPicture else { return }
         guard !didCallDismiss else { return }
         didCallDismiss = true
         let dismissedVideoId = videoId
@@ -1421,8 +1710,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate {
         // causes the new item to hang at status=0 indefinitely.
         let newPlayer = AVPlayer(playerItem: newItem)
         newPlayer.automaticallyWaitsToMinimizeStalling = true
-        self.player = newPlayer
-        controller.player = newPlayer
+        adoptPlayer(newPlayer, controller: controller)
         transportBar?.preferredPlaybackRate = targetSpeed
         transportBar?.attach(player: newPlayer)
 
