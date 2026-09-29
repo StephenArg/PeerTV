@@ -53,7 +53,15 @@ final class DownloadManager: NSObject, ObservableObject {
     static let shared = DownloadManager()
 
     @Published var activeDownloads: [String: DownloadProgress] = [:]
-    @Published var downloadedVideos: [DownloadedVideo] = []
+    @Published var downloadedVideos: [DownloadedVideo] = [] {
+        didSet {
+            let ids = Set(downloadedVideos.map(\.videoId))
+            if ids != downloadedVideoIds { downloadedVideoIds = ids }
+        }
+    }
+    /// Published on its own so grid tiles can track downloaded state without re-rendering on
+    /// every `activeDownloads` progress tick.
+    @Published private(set) var downloadedVideoIds: Set<String> = []
     @Published var batchProgress: BatchProgress?
 
     struct BatchProgress {
@@ -62,6 +70,14 @@ final class DownloadManager: NSObject, ObservableObject {
         var completed: Int
         var currentVideoId: String?
     }
+
+    /// Transfers on this session keep running while the app is suspended, and tvOS relaunches the
+    /// app to deliver results if it was terminated meanwhile. Only download tasks run on it.
+    static let backgroundSessionIdentifier = "com.peernext.PeerTV.downloads"
+
+    /// Set by the app delegate when tvOS relaunches the app for session events; called once
+    /// `urlSessionDidFinishEvents` has delivered them all.
+    var backgroundEventsCompletionHandler: (() -> Void)?
 
     private var urlSession: URLSession!
     private var taskVideoIdMap: [Int: String] = [:]
@@ -77,8 +93,17 @@ final class DownloadManager: NSObject, ObservableObject {
 
     /// Per-account offline library; `nil` before any account is active (empty library).
     private var activeDownloadAccountId: UUID?
+    /// False until the first `setActiveAccount` at launch, which must not cancel downloads the
+    /// background session carried over from the previous process.
+    private var hasActivatedAccount = false
+    /// Until set, a finished task missing from `taskMetaMap` is a carried-over download not yet
+    /// adopted (save it). Afterwards, a missing entry means it was cancelled (discard it).
+    private var hasAdoptedRelaunchedTasks = false
 
-    private struct PendingDownloadMeta {
+    /// `Codable` covers what survives an app relaunch: it's stored as JSON in the task's
+    /// `taskDescription`. The token and API client stay in memory, so a download adopted after a
+    /// relaunch skips caption sidecars and the 401/403 HLS fallback.
+    private struct PendingDownloadMeta: Codable {
         let videoId: String
         let name: String
         let thumbnailPath: String?
@@ -91,8 +116,24 @@ final class DownloadManager: NSObject, ObservableObject {
         /// True when file/HLS URLs point at another host than `apiClient` (federation). Local OAuth and
         /// `videoFileToken` from our instance are not valid on the origin server — sending them causes 401.
         let mediaHostDiffersFromAPI: Bool
-        let accessToken: String?
-        let apiClient: PeerTubeAPIClient?
+        /// Library the file is saved into, even if another account is active when it finishes.
+        let accountId: UUID?
+        var accessToken: String? = nil
+        var apiClient: PeerTubeAPIClient? = nil
+
+        private enum CodingKeys: String, CodingKey {
+            case videoId, name, thumbnailPath, channelName, duration, qualityLabel, expectedSize
+            case fallbackPlaylistURLString, mediaHostDiffersFromAPI, accountId
+        }
+
+        var taskDescription: String? {
+            (try? JSONEncoder().encode(self)).flatMap { String(data: $0, encoding: .utf8) }
+        }
+
+        static func decode(taskDescription: String?) -> PendingDownloadMeta? {
+            guard let data = taskDescription?.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(PendingDownloadMeta.self, from: data)
+        }
     }
 
     private struct SpeedTracker {
@@ -100,41 +141,88 @@ final class DownloadManager: NSObject, ObservableObject {
         var lastTime: Date = Date()
     }
 
-    private static func cachesDirectory() -> URL {
+    private nonisolated static func cachesDirectory() -> URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
     }
 
-    private func accountRootURL(for id: UUID) -> URL {
-        let root = Self.cachesDirectory().appendingPathComponent("Accounts/\(id.uuidString)", isDirectory: true)
+    private nonisolated static func accountRootURL(for id: UUID) -> URL {
+        let root = cachesDirectory().appendingPathComponent("Accounts/\(id.uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
     }
 
-    /// When no account is active, uses legacy cache layout (empty until an account activates).
-    private func downloadsDirectoryURL() -> URL {
-        guard let id = activeDownloadAccountId else {
-            let dir = Self.cachesDirectory().appendingPathComponent("Downloads", isDirectory: true)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            return dir
+    /// `nil` uses the legacy cache layout. Safe from the URLSession delegate queue.
+    private nonisolated static func downloadsDirectoryURL(for accountId: UUID?) -> URL {
+        let dir: URL
+        if let accountId {
+            dir = accountRootURL(for: accountId).appendingPathComponent("Downloads", isDirectory: true)
+        } else {
+            dir = cachesDirectory().appendingPathComponent("Downloads", isDirectory: true)
         }
-        let dir = accountRootURL(for: id).appendingPathComponent("Downloads", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    private func metadataURL() -> URL {
-        guard let id = activeDownloadAccountId else {
-            return Self.cachesDirectory().appendingPathComponent("downloads-metadata.json")
+    private static func metadataURL(for accountId: UUID?) -> URL {
+        guard let accountId else {
+            return cachesDirectory().appendingPathComponent("downloads-metadata.json")
         }
-        return accountRootURL(for: id).appendingPathComponent("downloads-metadata.json")
+        return accountRootURL(for: accountId).appendingPathComponent("downloads-metadata.json")
+    }
+
+    /// When no account is active, uses legacy cache layout (empty until an account activates).
+    private func downloadsDirectoryURL() -> URL {
+        Self.downloadsDirectoryURL(for: activeDownloadAccountId)
+    }
+
+    private func metadataURL() -> URL {
+        Self.metadataURL(for: activeDownloadAccountId)
     }
 
     override init() {
         super.init()
-        let config = URLSessionConfiguration.default
+        let config = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionIdentifier)
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 60 * 60 * 4
         urlSession = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        Task { await adoptRelaunchedTasks() }
+    }
+
+    /// Rebuilds bookkeeping for downloads the background session kept running while the
+    /// previous process was suspended or terminated.
+    private func adoptRelaunchedTasks() async {
+        let tasks = await urlSession.allTasks
+        for task in tasks where taskMetaMap[task.taskIdentifier] == nil {
+            guard task.state == .running || task.state == .suspended else { continue }
+            guard let meta = PendingDownloadMeta.decode(taskDescription: task.taskDescription) else {
+                // No way to name or file the result.
+                task.cancel()
+                continue
+            }
+            taskVideoIdMap[task.taskIdentifier] = meta.videoId
+            taskMetaMap[task.taskIdentifier] = meta
+            speedTrackers[task.taskIdentifier] = SpeedTracker(lastBytes: task.countOfBytesReceived, lastTime: Date())
+            if task.state == .suspended { task.resume() }
+            downloadLog.notice("adopted background download videoId=\(meta.videoId, privacy: .public)")
+        }
+        hasAdoptedRelaunchedTasks = true
+        publishAdoptedDownloads()
+    }
+
+    /// Lists adopted downloads that belong to the active account in `activeDownloads`.
+    private func publishAdoptedDownloads() {
+        for (taskId, meta) in taskMetaMap where meta.accountId == activeDownloadAccountId {
+            guard activeDownloads[meta.videoId] == nil,
+                  !downloadedVideoIds.contains(meta.videoId) else { continue }
+            activeDownloads[meta.videoId] = DownloadProgress(
+                videoId: meta.videoId,
+                qualityLabel: meta.qualityLabel,
+                totalBytes: meta.expectedSize,
+                receivedBytes: speedTrackers[taskId]?.lastBytes ?? 0,
+                bytesPerSecond: 0,
+                state: .downloading
+            )
+        }
     }
 
     /// Moves pre-multi-account `Caches/Downloads` + `downloads-metadata.json` into `Caches/Accounts/<id>/`.
@@ -166,14 +254,20 @@ final class DownloadManager: NSObject, ObservableObject {
         }
     }
 
-    /// Cancels in-flight work and loads metadata for the given account (`nil` = no account / empty library).
+    /// Loads metadata for the given account (`nil` = no account / empty library). Switching to a
+    /// different account cancels in-flight work. The first call at launch and repeat calls for the
+    /// same account (session refresh, signing in again) leave running downloads alone.
     func setActiveAccount(_ id: UUID?) {
-        cancelAllDownloadActivity()
+        if hasActivatedAccount, id == activeDownloadAccountId { return }
+        if hasActivatedAccount { cancelAllDownloadActivity() }
+        hasActivatedAccount = true
         activeDownloadAccountId = id
         downloadedVideos = []
-        guard id != nil else { return }
-        loadMetadata()
-        pruneInvalidDownloadEntries()
+        if id != nil {
+            loadMetadata()
+            pruneInvalidDownloadEntries()
+        }
+        publishAdoptedDownloads()
     }
 
     private func cancelAllDownloadActivity() {
@@ -203,7 +297,7 @@ final class DownloadManager: NSObject, ObservableObject {
     ) {
         let videoId = video.stableId
         guard activeDownloads[videoId] == nil else { return }
-        guard !isDownloaded(videoId) else { return }
+        guard !hasValidLocalFile(videoId) else { return }
 
         // Prefer the static `fileUrl` over `fileDownloadUrl`. On default PeerTube nginx configs
         // the `/download/...` route (fileDownloadUrl) is proxied through the Node backend and hard
@@ -241,6 +335,7 @@ final class DownloadManager: NSObject, ObservableObject {
             expectedSize: Int64(file.size ?? 0),
             fallbackPlaylistURLString: fallbackPlaylistURLString,
             mediaHostDiffersFromAPI: mediaHostDiffersFromAPI,
+            accountId: activeDownloadAccountId,
             accessToken: accessToken,
             apiClient: apiClient
         )
@@ -442,7 +537,13 @@ final class DownloadManager: NSObject, ObservableObject {
         return url
     }
 
+    /// Metadata-only check, safe to call from view bodies. A file removed since the last prune is
+    /// caught (and its entry dropped) by `localFileURL(for:)` when playback starts.
     func isDownloaded(_ videoId: String) -> Bool {
+        downloadedVideoIds.contains(videoId)
+    }
+
+    private func hasValidLocalFile(_ videoId: String) -> Bool {
         localFileURL(for: videoId) != nil
     }
 
@@ -455,7 +556,7 @@ final class DownloadManager: NSObject, ObservableObject {
         accessToken: String?,
         apiClient: PeerTubeAPIClient?
     ) {
-        let toDownload = videoIds.filter { !isDownloaded($0) && activeDownloads[$0] == nil }
+        let toDownload = videoIds.filter { !hasValidLocalFile($0) && activeDownloads[$0] == nil }
         guard !toDownload.isEmpty else {
             return
         }
@@ -501,7 +602,7 @@ final class DownloadManager: NSObject, ObservableObject {
             return
         }
         let videoId = batchQueue.removeFirst()
-        if isDownloaded(videoId) || activeDownloads[videoId] != nil {
+        if hasValidLocalFile(videoId) || activeDownloads[videoId] != nil {
             batchProgress?.completed += 1
             processNextBatchItem()
             return
@@ -573,6 +674,7 @@ final class DownloadManager: NSObject, ObservableObject {
             )
         }
         let task = urlSession.downloadTask(with: request)
+        task.taskDescription = meta.taskDescription
         taskVideoIdMap[task.taskIdentifier] = meta.videoId
         taskMetaMap[task.taskIdentifier] = meta
         speedTrackers[task.taskIdentifier] = SpeedTracker()
@@ -1024,11 +1126,95 @@ final class DownloadManager: NSObject, ObservableObject {
     }
 
     private func saveMetadata() {
+        Self.writeMetadata(downloadedVideos, to: metadataURL())
+    }
+
+    private static func writeMetadata(_ entries: [DownloadedVideo], to url: URL) {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = .prettyPrinted
-        guard let data = try? encoder.encode(downloadedVideos) else { return }
-        try? data.write(to: metadataURL(), options: .atomic)
+        guard let data = try? encoder.encode(entries) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// Adds a finished download to its account's library: the in-memory list for the active
+    /// account, otherwise that account's metadata file.
+    private func recordCompletedDownload(_ entry: DownloadedVideo, accountId: UUID?) {
+        guard accountId == activeDownloadAccountId else {
+            let url = Self.metadataURL(for: accountId)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            var entries = (try? Data(contentsOf: url))
+                .flatMap { try? decoder.decode([DownloadedVideo].self, from: $0) } ?? []
+            entries.removeAll { $0.videoId == entry.videoId }
+            entries.append(entry)
+            Self.writeMetadata(entries, to: url)
+            return
+        }
+        activeDownloads.removeValue(forKey: entry.videoId)
+        downloadedVideos.removeAll { $0.videoId == entry.videoId }
+        downloadedVideos.append(entry)
+        saveMetadata()
+    }
+
+    /// Main-actor half of `didFinishDownloadingTo`, after the file was moved to `fileURL`.
+    private func finishDirectDownload(taskId: Int, storedMeta: PendingDownloadMeta, fileURL: URL, filename: String) {
+        let inMemoryMeta = taskMetaMap[taskId]
+        taskVideoIdMap.removeValue(forKey: taskId)
+        taskMetaMap.removeValue(forKey: taskId)
+        speedTrackers.removeValue(forKey: taskId)
+
+        let meta: PendingDownloadMeta
+        if let inMemoryMeta {
+            meta = inMemoryMeta
+        } else if !hasAdoptedRelaunchedTasks {
+            // Carried over from the previous process and finished before adoption ran.
+            meta = storedMeta
+        } else {
+            downloadLog.notice("discarding finished download that was cancelled videoId=\(storedMeta.videoId, privacy: .public)")
+            try? FileManager.default.removeItem(at: fileURL)
+            return
+        }
+        let isActiveAccount = meta.accountId == activeDownloadAccountId
+
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int64) ?? meta.expectedSize
+        guard Self.isPlausibleVideoFile(at: fileURL, byteCount: fileSize) else {
+            downloadLog.error(
+                "downloaded file failed validation (wrong type or too small) videoId=\(meta.videoId, privacy: .public) bytes=\(fileSize) pathExt=\(fileURL.pathExtension, privacy: .public)"
+            )
+            try? FileManager.default.removeItem(at: fileURL)
+            if isActiveAccount { activeDownloads[meta.videoId]?.state = .failed }
+            notifyDownloadFinished(videoId: meta.videoId)
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var capMap: [String: String]? = nil
+            // Sidecars are written into the active account's folder, so only fetch them there.
+            if let client = meta.apiClient, isActiveAccount {
+                let m = await self.downloadCaptionSidecars(
+                    videoId: meta.videoId,
+                    apiClient: client,
+                    accessToken: meta.accessToken
+                )
+                capMap = m.isEmpty ? nil : m
+            }
+            let entry = DownloadedVideo(
+                videoId: meta.videoId,
+                name: meta.name,
+                thumbnailPath: meta.thumbnailPath,
+                channelName: meta.channelName,
+                duration: meta.duration,
+                qualityLabel: meta.qualityLabel,
+                fileSize: fileSize,
+                localFilename: filename,
+                downloadedAt: Date(),
+                captionFilenames: capMap
+            )
+            self.recordCompletedDownload(entry, accountId: meta.accountId)
+            self.notifyDownloadFinished(videoId: meta.videoId)
+        }
     }
 }
 
@@ -1050,7 +1236,8 @@ extension DownloadManager: URLSessionDownloadDelegate {
                       let meta = self.taskMetaMap[taskId] else { return }
 
                 let authLikeFailure = http.statusCode == 401 || http.statusCode == 403
-                if authLikeFailure,
+                // The export fallback needs the in-memory client, which adopted tasks don't have.
+                if authLikeFailure, meta.apiClient != nil,
                    let hlsStr = meta.fallbackPlaylistURLString,
                    let hlsURL = URL(string: hlsStr), !hlsStr.isEmpty {
                     let reqURL = downloadTask.originalRequest?.url.map { downloadURLDescription($0) } ?? "nil"
@@ -1085,96 +1272,41 @@ extension DownloadManager: URLSessionDownloadDelegate {
             return
         }
 
-        let suggestedFilename = downloadTask.response?.suggestedFilename
+        // The system deletes `location` when this method returns, so the file is moved into the
+        // owning account's library here, using metadata stored on the task itself (the in-memory
+        // maps may not be rebuilt yet after a relaunch).
+        guard let storedMeta = PendingDownloadMeta.decode(taskDescription: downloadTask.taskDescription) else {
+            downloadLog.error("finished download has no stored metadata taskId=\(taskId)")
+            return
+        }
 
-        let suggestedExt = suggestedFilename
+        let suggestedExt = downloadTask.response?.suggestedFilename
             .flatMap { URL(string: $0)?.pathExtension }
         let ext = (suggestedExt?.isEmpty == false) ? suggestedExt! : "mp4"
 
-        let downloadsDir = AccountPersistence.resolvedDownloadsDirectoryURL()
-        if !FileManager.default.fileExists(atPath: downloadsDir.path) {
-            try? FileManager.default.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
-        }
-
-        let tempDest = downloadsDir.appendingPathComponent("tmp_\(taskId).\(ext)")
-        try? FileManager.default.removeItem(at: tempDest)
-
+        let filename = "\(storedMeta.videoId).\(ext)"
+        let finalDest = Self.downloadsDirectoryURL(for: storedMeta.accountId).appendingPathComponent(filename)
         do {
-            try FileManager.default.copyItem(at: location, to: tempDest)
+            try? FileManager.default.removeItem(at: finalDest)
+            try FileManager.default.moveItem(at: location, to: finalDest)
         } catch {
             downloadLog.error(
-                "copy temp download from URLSession failed taskId=\(taskId) error=\(error.localizedDescription, privacy: .public)"
+                "move completed download failed videoId=\(storedMeta.videoId, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.taskMetaMap.removeValue(forKey: taskId) != nil else { return }
+                self.taskVideoIdMap.removeValue(forKey: taskId)
+                self.speedTrackers.removeValue(forKey: taskId)
+                if storedMeta.accountId == self.activeDownloadAccountId {
+                    self.activeDownloads[storedMeta.videoId]?.state = .failed
+                }
+                self.notifyDownloadFinished(videoId: storedMeta.videoId)
+            }
             return
         }
 
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            guard let meta = self.taskMetaMap[taskId] else {
-                try? FileManager.default.removeItem(at: tempDest)
-                return
-            }
-
-            let filename = "\(meta.videoId).\(ext)"
-            let finalDest = downloadsDir.appendingPathComponent(filename)
-            try? FileManager.default.removeItem(at: finalDest)
-            do {
-                try FileManager.default.moveItem(at: tempDest, to: finalDest)
-            } catch {
-                downloadLog.error(
-                    "move completed download failed videoId=\(meta.videoId, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
-                )
-                return
-            }
-
-            let fileSize = (try? FileManager.default.attributesOfItem(atPath: finalDest.path)[.size] as? Int64) ?? meta.expectedSize
-
-            guard Self.isPlausibleVideoFile(at: finalDest, byteCount: fileSize) else {
-                downloadLog.error(
-                    "downloaded file failed validation (wrong type or too small) videoId=\(meta.videoId, privacy: .public) bytes=\(fileSize) pathExt=\(finalDest.pathExtension, privacy: .public)"
-                )
-                try? FileManager.default.removeItem(at: finalDest)
-                self.activeDownloads[meta.videoId]?.state = .failed
-                self.taskVideoIdMap.removeValue(forKey: taskId)
-                self.taskMetaMap.removeValue(forKey: taskId)
-                self.speedTrackers.removeValue(forKey: taskId)
-                self.notifyDownloadFinished(videoId: meta.videoId)
-                return
-            }
-
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                var capMap: [String: String]? = nil
-                if let client = meta.apiClient {
-                    let m = await self.downloadCaptionSidecars(
-                        videoId: meta.videoId,
-                        apiClient: client,
-                        accessToken: meta.accessToken
-                    )
-                    capMap = m.isEmpty ? nil : m
-                }
-                let entry = DownloadedVideo(
-                    videoId: meta.videoId,
-                    name: meta.name,
-                    thumbnailPath: meta.thumbnailPath,
-                    channelName: meta.channelName,
-                    duration: meta.duration,
-                    qualityLabel: meta.qualityLabel,
-                    fileSize: fileSize,
-                    localFilename: filename,
-                    downloadedAt: Date(),
-                    captionFilenames: capMap
-                )
-
-                self.activeDownloads.removeValue(forKey: meta.videoId)
-                self.taskVideoIdMap.removeValue(forKey: taskId)
-                self.taskMetaMap.removeValue(forKey: taskId)
-                self.speedTrackers.removeValue(forKey: taskId)
-                self.downloadedVideos.removeAll { $0.videoId == meta.videoId }
-                self.downloadedVideos.append(entry)
-                self.saveMetadata()
-                self.notifyDownloadFinished(videoId: meta.videoId)
-            }
+            self?.finishDirectDownload(taskId: taskId, storedMeta: storedMeta, fileURL: finalDest, filename: filename)
         }
     }
 
@@ -1239,6 +1371,16 @@ extension DownloadManager: URLSessionDownloadDelegate {
             self.taskMetaMap.removeValue(forKey: taskId)
             self.speedTrackers.removeValue(forKey: taskId)
             self.notifyDownloadFinished(videoId: videoId)
+        }
+    }
+
+    /// All events queued while the app was in the background have been delivered.
+    nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let handler = self.backgroundEventsCompletionHandler
+            self.backgroundEventsCompletionHandler = nil
+            handler?()
         }
     }
 }

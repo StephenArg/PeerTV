@@ -4,7 +4,8 @@ import Security
 /// Stores OAuth tokens in the Keychain, namespaced per account id (`access_token.<uuid>`).
 final class TokenStore: @unchecked Sendable {
     private let service = "com.peernext.PeerTV"
-    private let accountId: UUID
+    /// Keys the shared refresh in `TokenRefreshCoordinator` (several clients can share an account).
+    let accountId: UUID
 
     /// Reserved bucket for pre-login / instance-only state (no row in `AccountRecord` yet).
     static let preLoginAccountId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
@@ -73,15 +74,20 @@ final class TokenStore: @unchecked Sendable {
     // MARK: - Keychain helpers
 
     private func write(value: String, account: String) {
-        delete(account: account)
         guard let data = value.data(using: .utf8) else { return }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: data
+            kSecAttrAccount as String: account
         ]
-        SecItemAdd(query as CFDictionary, nil)
+        // Update in place: a delete-then-add leaves a moment where concurrent requests read no
+        // token, go out unauthenticated, and get a 401 that no refresh can fix.
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecSuccess { return }
+        if status != errSecItemNotFound { SecItemDelete(query as CFDictionary) }
+        var add = query
+        add[kSecValueData as String] = data
+        SecItemAdd(add as CFDictionary, nil)
     }
 
     private func read(account: String) -> String? {

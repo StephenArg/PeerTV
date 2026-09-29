@@ -49,6 +49,46 @@ struct OAuthTokenError {
     }
 }
 
+// MARK: - Shared token refresh
+
+/// One OAuth refresh at a time per account and instance. PeerTube rotates the refresh token on
+/// every refresh, so two refreshes racing with the same token make the second fail, and a failed
+/// refresh signs the user out. Every 401 for the account, from any `PeerTubeAPIClient` built on
+/// its tokens, waits on the same refresh instead.
+actor TokenRefreshCoordinator {
+    static let shared = TokenRefreshCoordinator()
+
+    private var inFlight: [String: Task<String, Error>] = [:]
+
+    /// Returns the access token to retry with after the server rejected `rejectedAccessToken`.
+    /// When the stored token has already moved on (another request refreshed first), that token
+    /// is returned without a network call.
+    func accessToken(
+        replacing rejectedAccessToken: String,
+        tokenStore: TokenStore,
+        host: String,
+        refresh: @escaping @Sendable (_ refreshToken: String) async throws -> OAuthTokenResponse
+    ) async throws -> String {
+        let key = "\(tokenStore.accountId.uuidString)@\(host.lowercased())"
+        if let running = inFlight[key] {
+            return try await running.value
+        }
+        if let current = tokenStore.accessToken, current != rejectedAccessToken {
+            return current
+        }
+        guard let refreshToken = tokenStore.refreshToken else { throw APIError.unauthorized }
+
+        let task = Task<String, Error> {
+            let tokens = try await refresh(refreshToken)
+            tokenStore.save(accessToken: tokens.accessToken, refreshToken: tokens.refreshToken)
+            return tokens.accessToken
+        }
+        inFlight[key] = task
+        defer { inFlight[key] = nil }
+        return try await task.value
+    }
+}
+
 /// Central networking client. Builds requests, attaches auth, decodes responses.
 /// Thread-safety: baseURL is only mutated from @MainActor (SessionStore);
 /// all other mutable state lives in TokenStore which is already @unchecked Sendable.
@@ -207,18 +247,20 @@ final class PeerTubeAPIClient: @unchecked Sendable {
                 hasAccessToken: tokenStore.accessToken != nil,
                 hasRefreshToken: tokenStore.refreshToken != nil
             )
-            let refreshed: OAuthTokenResponse
-            do {
-                refreshed = try await refreshToken(base: base)
-            } catch {
-                Self.log.error("OAuth refresh failed (original request was 401): \(String(describing: error), privacy: .public) localized=\(error.localizedDescription, privacy: .public)")
+            // A request sent without a token needs a sign-in, not a refresh.
+            guard let rejectedToken = Self.bearerToken(of: urlRequest) else {
                 throw APIError.unauthorized
             }
-            tokenStore.save(accessToken: refreshed.accessToken,
-                            refreshToken: refreshed.refreshToken)
-            Self.log.notice("OAuth refresh succeeded; retrying original request endpoint=\(logDescription, privacy: .public)")
+            let accessToken: String
+            do {
+                accessToken = try await refreshedAccessToken(replacing: rejectedToken, base: base)
+            } catch {
+                Self.log.error("OAuth refresh failed (original request was 401): \(String(describing: error), privacy: .public) localized=\(error.localizedDescription, privacy: .public)")
+                throw error
+            }
+            Self.log.notice("OAuth token ready; retrying original request endpoint=\(logDescription, privacy: .public)")
             var retry = try buildRequest()
-            retry.setValue("Bearer \(refreshed.accessToken)",
+            retry.setValue("Bearer \(accessToken)",
                            forHTTPHeaderField: "Authorization")
             let (retryData, retryResp) = try await session.data(for: retry)
             if let retryHttp = retryResp as? HTTPURLResponse {
@@ -353,7 +395,13 @@ final class PeerTubeAPIClient: @unchecked Sendable {
             timeoutInterval: 60
         )
         request.httpMethod = endpoint.method
-        if !skipAuth, let token = tokenStore.accessToken {
+        // Public OAuth bootstrap: a stale token could only earn a 401, and this runs inside the
+        // shared refresh, which a 401 would try to join.
+        let isOAuthBootstrap: Bool = {
+            if case .oauthClientsLocal = endpoint { return true }
+            return false
+        }()
+        if !skipAuth, !isOAuthBootstrap, let token = tokenStore.accessToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         if case .randomVideos = endpoint {
@@ -369,28 +417,30 @@ final class PeerTubeAPIClient: @unchecked Sendable {
         return request
     }
 
-    private func refreshToken(base: URL) async throws -> OAuthTokenResponse {
-        let host = base.host ?? base.absoluteString
-        Self.log.notice("refreshToken() starting host=\(host, privacy: .public) refreshTokenPresent=\(self.tokenStore.refreshToken != nil)")
-        guard let refresh = tokenStore.refreshToken else {
-            Self.log.error("refreshToken() aborted: no refresh token in keychain")
-            throw APIError.unauthorized
+    /// Access token to retry with after `rejectedAccessToken` got a 401, via the account's shared
+    /// refresh. Throws `APIError.unauthorized` only when the session is really over (no refresh
+    /// token, or the token endpoint rejected it); network and server errors are rethrown as is,
+    /// so being offline doesn't sign anyone out.
+    private func refreshedAccessToken(replacing rejectedAccessToken: String, base: URL) async throws -> String {
+        let oauth = OAuthService(apiClient: self)
+        return try await TokenRefreshCoordinator.shared.accessToken(
+            replacing: rejectedAccessToken,
+            tokenStore: tokenStore,
+            host: base.host ?? base.absoluteString
+        ) { refreshToken in
+            do {
+                return try await oauth.refreshToken(baseURL: base, refreshToken: refreshToken)
+            } catch APIError.httpError(let status, _) where status == 400 || status == 401 {
+                throw APIError.unauthorized
+            }
         }
-        let oauthClient: OAuthClientResponse = try await request(.oauthClientsLocal)
-        let body: [String: String] = [
-            "client_id": oauthClient.clientId,
-            "client_secret": oauthClient.clientSecret,
-            "grant_type": "refresh_token",
-            "refresh_token": refresh
-        ]
-        do {
-            let tokens: OAuthTokenResponse = try await postForm(.usersToken, body: body)
-            Self.log.notice("refreshToken() POST /users/token decoded OK host=\(host, privacy: .public)")
-            return tokens
-        } catch {
-            Self.log.error("refreshToken() POST /users/token failed: \(String(describing: error), privacy: .public)")
-            throw error
-        }
+    }
+
+    private static func bearerToken(of request: URLRequest) -> String? {
+        guard let header = request.value(forHTTPHeaderField: "Authorization"),
+              header.hasPrefix("Bearer ") else { return nil }
+        let token = String(header.dropFirst("Bearer ".count))
+        return token.isEmpty ? nil : token
     }
 
     private static func logHttpFailure(statusCode: Int, endpoint: String, host: String, data: Data) {

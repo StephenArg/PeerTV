@@ -79,6 +79,24 @@ enum PlayerSettings {
     static let defaultResolutionKey = "PeerTV.defaultResolutionId"
     /// BCP-47 language id of the last selected caption track, or unset when captions are Off.
     static let preferredCaptionLanguageKey = "PeerTV.preferredCaptionLanguage"
+    static let defaultPlaybackSpeedKey = "PeerTV.defaultPlaybackSpeed"
+
+    /// Speeds offered by the player's Speed menu and the Default speed setting, fastest first.
+    static let playbackSpeeds: [Float] = [3.0, 2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
+
+    /// Speed every video starts at (Settings → Playback). The player's Speed menu only changes the
+    /// video being watched. Stored as a Double so the Settings `@AppStorage` can bind to it.
+    static var defaultPlaybackSpeed: Float {
+        let stored = UserDefaults.standard.double(forKey: defaultPlaybackSpeedKey)
+        return stored > 0 ? Float(stored) : 1.0
+    }
+
+    /// "Normal" for 1x, otherwise e.g. "2x" or "1.25x".
+    static func speedLabel(_ speed: Float) -> String {
+        if speed == 1.0 { return "Normal" }
+        if speed == Float(Int(speed)) { return "\(Int(speed))x" }
+        return "\(speed)x"
+    }
 
     static var preferredCaptionLanguage: String? {
         get {

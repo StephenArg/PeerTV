@@ -51,4 +51,38 @@ final class HistoryViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
     }
+
+    /// Removes one video from the server-side history. The row disappears immediately and comes
+    /// back if the request fails. Returns `false` on failure.
+    @discardableResult
+    func remove(_ video: Video) async -> Bool {
+        guard let apiClient, let numericId = video.id else { return false }
+        let index = videos.firstIndex(where: { $0.stableId == video.stableId })
+        if let index { videos.remove(at: index) }
+        do {
+            _ = try await apiClient.rawRequest(.removeHistoryVideo(videoId: numericId))
+            // A loaded row shifted the server list by one; keep the next page from skipping a row.
+            if index != nil { currentStart = max(0, currentStart - 1) }
+            total = total.map { max(0, $0 - 1) }
+            return true
+        } catch {
+            if let index { videos.insert(video, at: min(index, videos.count)) }
+            return false
+        }
+    }
+
+    /// Clears the whole server-side history. Returns `false` on failure (the list is left as is).
+    @discardableResult
+    func clearAll() async -> Bool {
+        guard let apiClient else { return false }
+        do {
+            _ = try await apiClient.rawRequest(.clearHistory)
+            videos = []
+            currentStart = 0
+            total = nil
+            return true
+        } catch {
+            return false
+        }
+    }
 }

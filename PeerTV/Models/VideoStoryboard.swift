@@ -192,10 +192,12 @@ final class TileStoryboardLoader {
                     continue
                 }
                 let (data, _) = try await URLSession.shared.data(from: url)
-                guard let sheet = UIImage(data: data) else {
+                guard let rawSheet = UIImage(data: data) else {
                     sawDefinitiveEmpty = true
                     continue
                 }
+                // Decode once up front; each preview frame crops from this sheet.
+                let sheet = await rawSheet.byPreparingForDisplay() ?? rawSheet
                 return StoryboardThumbnailProvider(sheet: sheet, storyboard: storyboard)
             } catch {
                 lastError = error

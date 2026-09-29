@@ -24,6 +24,73 @@ struct PlaylistPlaybackQueue {
     let accessToken: String?
 }
 
+/// Detail, stream URL (with any video file token applied), and asset for a playlist item,
+/// ready to wrap in a new `AVPlayerItem`.
+private struct PreparedPlaylistItem {
+    let video: Video
+    let url: URL
+    let asset: AVURLAsset
+}
+
+private struct PlaylistItemPrefetch {
+    let videoId: String
+    let startedAt: Date
+    let task: Task<PreparedPlaylistItem?, Never>
+
+    /// The prefetched URL may carry a video file token; past this age (e.g. the user paused
+    /// near the end) it's prepared afresh instead.
+    var isStale: Bool { Date().timeIntervalSince(startedAt) > 5 * 60 }
+}
+
+// MARK: - Now Playing metadata
+
+/// Title, channel, and artwork published through `AVPlayerItem.externalMetadata`, which AVKit
+/// forwards to the system Now Playing info (Control Center).
+struct NowPlayingMetadata {
+    let title: String
+    let subtitle: String?
+    let artworkURL: URL?
+
+    init(title: String, subtitle: String?, artworkURL: URL?) {
+        self.title = title
+        self.subtitle = subtitle
+        self.artworkURL = artworkURL
+    }
+
+    /// `preferredArtworkURL` is usually the tile thumbnail the user just selected, which is
+    /// already in `ImageCache`; otherwise the larger preview image is resolved on `apiBaseURL`.
+    init(video: Video, apiBaseURL: URL?, preferredArtworkURL: URL? = nil) {
+        title = video.name ?? ""
+        subtitle = video.channel?.displayName ?? video.account?.displayName
+        artworkURL = preferredArtworkURL
+            ?? PeerTubeAssetURL.resolve(path: video.previewPath ?? video.thumbnailPath, instanceBase: apiBaseURL)
+    }
+
+    func metadataItems(artwork: UIImage?) -> [AVMetadataItem] {
+        var items = [Self.textItem(.commonIdentifierTitle, title)]
+        if let subtitle, !subtitle.isEmpty {
+            items.append(Self.textItem(.iTunesMetadataTrackSubTitle, subtitle))
+        }
+        if let data = artwork?.jpegData(compressionQuality: 0.85) {
+            let item = AVMutableMetadataItem()
+            item.identifier = .commonIdentifierArtwork
+            item.value = data as NSData
+            item.dataType = kCMMetadataBaseDataType_JPEG as String
+            item.extendedLanguageTag = "und"
+            items.append(item)
+        }
+        return items
+    }
+
+    private static func textItem(_ identifier: AVMetadataIdentifier, _ value: String) -> AVMetadataItem {
+        let item = AVMutableMetadataItem()
+        item.identifier = identifier
+        item.value = value as NSString
+        item.extendedLanguageTag = "und"
+        return item
+    }
+}
+
 // MARK: - PlayerPresenter
 
 /// Presents AVPlayerViewController directly via UIKit — no SwiftUI fullScreenCover
@@ -70,10 +137,17 @@ final class PlayerPresenter {
         }
 
         if let localURL = DownloadManager.shared.localFileURL(for: videoId) {
-            let localTitle = DownloadManager.shared.downloadedVideos.first(where: { $0.videoId == videoId })?.name ?? ""
+            let localEntry = DownloadManager.shared.downloadedVideos.first(where: { $0.videoId == videoId })
+            let localTitle = localEntry?.name ?? ""
             let prefetch = DownloadManager.shared.localPeerTubeCaptions(for: videoId)
             // Local downloads have no resolution choice; play the file as-is.
-            let localDuration = DownloadManager.shared.downloadedVideos.first(where: { $0.videoId == videoId })?.duration
+            let localDuration = localEntry?.duration
+            let localNowPlaying = NowPlayingMetadata(
+                title: localTitle,
+                subtitle: localEntry?.channelName,
+                artworkURL: historyTileThumbnailURL
+                    ?? PeerTubeAssetURL.resolve(path: localEntry?.thumbnailPath, instanceBase: apiClient.baseURL)
+            )
             presentPlayer(
                 url: localURL,
                 autoURL: localURL,
@@ -87,7 +161,8 @@ final class PlayerPresenter {
                 isLocalDownload: true,
                 accountId: accountId,
                 prefetchedCaptions: prefetch.isEmpty ? nil : prefetch,
-                durationSeconds: localDuration
+                durationSeconds: localDuration,
+                nowPlaying: localNowPlaying
             )
             return
         }
@@ -167,7 +242,12 @@ final class PlayerPresenter {
                     playlistQueue: playlistQueue,
                     isLocalDownload: false,
                     accountId: accountId,
-                    durationSeconds: video.duration
+                    durationSeconds: video.duration,
+                    nowPlaying: NowPlayingMetadata(
+                        video: video,
+                        apiBaseURL: resolvedClient.baseURL,
+                        preferredArtworkURL: historyTileThumbnailURL
+                    )
                 )
             } catch {
                 PlaybackLog.log.error("videoDetail failed videoId=\(videoId, privacy: .public) \(error.localizedDescription, privacy: .public) \(String(describing: error), privacy: .public)")
@@ -290,7 +370,8 @@ final class PlayerPresenter {
         isLocalDownload: Bool,
         accountId: UUID?,
         prefetchedCaptions: [PeerTubeCaption]? = nil,
-        durationSeconds: Int? = nil
+        durationSeconds: Int? = nil,
+        nowPlaying: NowPlayingMetadata? = nil
     ) {
         guard let root = Self.keyWindow?.rootViewController else {
             PlaybackLog.log.error("presentPlayer: no root VC videoId=\(videoId, privacy: .public)")
@@ -366,6 +447,7 @@ final class PlayerPresenter {
         ) { [weak self] in
             self?.isPresenting = false
         }
+        coordinator.applyNowPlaying(nowPlaying)
         playerVC.delegate = coordinator
 
         // Wrap AVPlayerViewController in a container so focus routes to the overlay reliably.
@@ -507,7 +589,11 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     private let accountId: UUID?
     private var playlistQueue: PlaylistPlaybackQueue?
     private var currentLabel: String
-    private var currentSpeed: Float = 1.0
+    /// Each video starts at the Default speed setting; the Speed menu and hold-for-2x change it for
+    /// the current video only. Mirrored onto `AVPlayer.defaultRate` so any `play()` call resumes at
+    /// this speed.
+    private var currentSpeed: Float = PlayerSettings.defaultPlaybackSpeed
+    private var nowPlaying: NowPlayingMetadata?
     /// Playback rate captured when the user's finger first latched the temporary touch-hold
     /// boost (non-nil => boost is active). Restored on finger-lift. We use `player.rate` at
     /// the moment of latching rather than `currentSpeed` so the restore matches what the user
@@ -537,11 +623,18 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     private var captions: [PeerTubeCaption] = []
     /// Currently displayed caption track (`nil` = Off).
     private var selectedCaptionLanguage: String?
+    /// Sorted by start time; empty when the video has none or the instance predates PeerTube 6.
+    private var chapters: [VideoChapter] = []
+    /// Next playlist item, prepared near the end of the current one so autoplay skips the
+    /// detail/token/manifest round trips.
+    private var nextItemPrefetch: PlaylistItemPrefetch?
     private var pendingResumeAt: TimeInterval?
     private var hasStartedInitialPlayback = false
 
-    private static let speeds: [Float] = [3.0, 2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
     private static let watchReportInterval: Double = 30
+    /// Prefetch the next playlist item once this little playback time remains. Kept short
+    /// because the prefetched stream URL can carry a video file token that expires.
+    private static let playlistPrefetchLeadTime: TimeInterval = 120
 
     init(resolutions: [ResolutionOption], autoURL: URL, initialLabel: String, accessToken: String?,
          player: AVPlayer, controller: AVPlayerViewController,
@@ -591,6 +684,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             onQualityTapped: { [weak self] in self?.presentQualityMenu() },
             onSpeedTapped: { [weak self] in self?.presentSpeedMenu() },
             onCaptionsTapped: { [weak self] in self?.presentCaptionsMenu() },
+            onChaptersTapped: { [weak self] in self?.presentChaptersMenu() },
             onPictureInPictureTapped: { [weak self] in self?.startPictureInPicture() },
             onSkipNextTapped: { [weak self] in self?.userRequestedSkipToNextPlaylistItem() },
             onAddToPlaylistTapped: { [weak self] in self?.presentAddToPlaylistMenu() },
@@ -600,11 +694,30 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         )
         transportBar?.attach(player: player)
         transportBar?.preferredPlaybackRate = currentSpeed
+        player.defaultRate = currentSpeed
         fetchStoryboards(for: videoId)
+        fetchChapters(for: videoId)
         if let pre = prefetchedCaptions, !pre.isEmpty {
             receivedCaptionsList(pre)
         } else if !isLocalDownload {
             fetchCaptions(for: videoId)
+        }
+    }
+
+    /// Publishes title/channel immediately and adds artwork once it loads.
+    func applyNowPlaying(_ metadata: NowPlayingMetadata?) {
+        nowPlaying = metadata
+        guard let metadata else {
+            player?.currentItem?.externalMetadata = []
+            return
+        }
+        player?.currentItem?.externalMetadata = metadata.metadataItems(artwork: nil)
+        guard let artworkURL = metadata.artworkURL else { return }
+        let requestedVideoId = videoId
+        Task { @MainActor [weak self] in
+            guard let artwork = await ImageCache.shared.load(artworkURL),
+                  let self, self.videoId == requestedVideoId else { return }
+            self.player?.currentItem?.externalMetadata = metadata.metadataItems(artwork: artwork)
         }
     }
 
@@ -746,7 +859,9 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             else { return }
 
             let (imageData, _) = try await URLSession.shared.data(from: sheetURL)
-            guard let sheet = UIImage(data: imageData) else { return }
+            guard let rawSheet = UIImage(data: imageData) else { return }
+            // Decode once up front; scrub thumbnails crop from this sheet on every skim tick.
+            let sheet = await rawSheet.byPreparingForDisplay() ?? rawSheet
 
             let provider = StoryboardThumbnailProvider(sheet: sheet, storyboard: storyboard)
             await MainActor.run { [weak self] in
@@ -757,6 +872,31 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             }
         } catch {
             PlaybackLog.log.notice("storyboards unavailable videoId=\(id, privacy: .public) \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Fetches chapters for the scrubber markers and the Chapters menu. Instances older than
+    /// PeerTube 6 return 404; any failure is treated as "no chapters". Local downloads try too,
+    /// since chapters aren't stored with the file (offline, the request just fails).
+    private func fetchChapters(for id: String) {
+        guard let apiClient else { return }
+        Task { [weak self, videoId = id] in
+            await self?.loadChapters(id: videoId, apiClient: apiClient)
+        }
+    }
+
+    private func loadChapters(id: String, apiClient: PeerTubeAPIClient) async {
+        do {
+            let resp: VideoChaptersResponse = try await apiClient.request(.videoChapters(id: id))
+            let sorted = resp.chapters.sorted { $0.timecode < $1.timecode }
+            await MainActor.run { [weak self] in
+                // Same late-arrival guard as storyboards: a playlist transition may have moved on.
+                guard let self, self.videoId == id else { return }
+                self.chapters = sorted
+                self.transportBar?.setChapters(sorted)
+            }
+        } catch {
+            PlaybackLog.log.notice("chapters unavailable videoId=\(id, privacy: .public) \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -800,7 +940,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     /// bypass the "only if already playing" guard in `setSpeed` because the user held the
     /// button specifically to trigger this — they expect an immediate, observable change even
     /// if the video is paused. We also update `currentSpeed` so the new rate is reapplied
-    /// after a resolution swap or playlist transition (which build fresh `AVPlayer`s).
+    /// after a resolution swap (which builds a fresh `AVPlayer`).
     ///
     /// The decision is based on `player.rate` rather than the stored `currentSpeed` because
     /// `AVPlayer.play()` always snaps rate back to 1.0, so `currentSpeed` can go stale after
@@ -811,6 +951,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         let currentRate = player?.rate ?? 1.0
         let newSpeed: Float = abs(currentRate - fast) < 0.001 ? 1.0 : fast
         currentSpeed = newSpeed
+        player?.defaultRate = newSpeed
         player?.rate = newSpeed
         transportBar?.preferredPlaybackRate = newSpeed
         transportBar?.showSpeedNotification("\(Int(newSpeed))x")
@@ -945,6 +1086,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         guard !hasStartedInitialPlayback else { return }
         hasStartedInitialPlayback = true
         guard let player else { return }
+        announceStartingSpeedIfNeeded()
 
         if let resumeAt = pendingResumeAt {
             pendingResumeAt = nil
@@ -1097,22 +1239,9 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         showLoadingOverlay(in: controller)
 
         do {
-            let data = try await nextQueue.apiClient.rawRequest(.videoDetail(id: nextVideoId))
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            decoder.dateDecodingStrategy = .iso8601
-            let video = try decoder.decode(Video.self, from: data)
-
-            guard var url = video.hlsPlaylistURL ?? video.playbackURL else {
-                throw URLError(.badURL)
-            }
-
-            url = await PlayerPresenter.urlWithHLSTokenIfNeeded(
-                url: url,
-                videoId: nextVideoId,
-                apiClient: nextQueue.apiClient,
-                accessToken: nextQueue.accessToken
-            )
+            let prepared = try await takePreparedPlaylistItem(videoId: nextVideoId, queue: nextQueue)
+            let video = prepared.video
+            let url = prepared.url
 
             if let oldObs = endObserver {
                 NotificationCenter.default.removeObserver(oldObs)
@@ -1138,21 +1267,22 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
                 masterURL: url,
                 defaultResolution: PlayerSettings.defaultResolution
             )
-            let startURL = url
             currentLabel = pick.label
             title = video.name ?? ""
             transportBar?.setTitle(title)
-            // Drop stale storyboard; `fetchStoryboards` below re-installs one for the new item.
+            // Drop stale storyboard and chapters; the fetches below re-install them for the new item.
             transportBar?.storyboardProvider = nil
+            chapters = []
+            transportBar?.setChapters([])
             fetchStoryboards(for: nextVideoId)
+            fetchChapters(for: nextVideoId)
             fetchCaptions(for: nextVideoId)
+            // Like a freshly opened video, start at the default speed; a speed picked for the
+            // previous item doesn't carry over. `adoptPlayer` copies it onto the new player.
+            currentSpeed = PlayerSettings.defaultPlaybackSpeed
+            transportBar?.preferredPlaybackRate = currentSpeed
 
-            let asset = AVPlayerViewControllerRepresentable.makeAsset(
-                url: startURL,
-                accessToken: nextQueue.accessToken,
-                instanceBaseURL: nextQueue.apiClient.baseURL
-            )
-            let newItem = AVPlayerItem(asset: asset)
+            let newItem = AVPlayerItem(asset: prepared.asset)
             newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
             HLSPlaybackPreferences.applyPreferredMaximumResolution(pick.preferredMaximumResolution, to: newItem)
 
@@ -1166,6 +1296,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             let newPlayer = AVPlayer(playerItem: newItem)
             newPlayer.automaticallyWaitsToMinimizeStalling = true
             adoptPlayer(newPlayer, controller: controller)
+            applyNowPlaying(NowPlayingMetadata(video: video, apiBaseURL: nextQueue.apiClient.baseURL))
             transportBar?.attach(player: newPlayer)
 
             endObserver = NotificationCenter.default.addObserver(
@@ -1191,6 +1322,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
                                 self.isSwitching = false
                                 self.removeLoadingOverlay()
                                 newPlayer.play()
+                                self.announceStartingSpeedIfNeeded()
                             }
                         }
                     } else if item.status == .failed {
@@ -1212,6 +1344,74 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         }
     }
 
+    // MARK: Playlist prefetch
+
+    /// Fetches the item's detail, applies any video file token, and builds its asset.
+    @MainActor
+    private static func preparePlaylistItem(videoId: String, queue: PlaylistPlaybackQueue) async throws -> PreparedPlaylistItem {
+        let data = try await queue.apiClient.rawRequest(.videoDetail(id: videoId))
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .iso8601
+        let video = try decoder.decode(Video.self, from: data)
+
+        guard let rawURL = video.hlsPlaylistURL ?? video.playbackURL else {
+            throw URLError(.badURL)
+        }
+        let url = await PlayerPresenter.urlWithHLSTokenIfNeeded(
+            url: rawURL,
+            videoId: videoId,
+            apiClient: queue.apiClient,
+            accessToken: queue.accessToken
+        )
+        let asset = AVPlayerViewControllerRepresentable.makeAsset(
+            url: url,
+            accessToken: queue.accessToken,
+            instanceBaseURL: queue.apiClient.baseURL
+        )
+        return PreparedPlaylistItem(video: video, url: url, asset: asset)
+    }
+
+    /// Starts preparing the next playlist item once `playlistPrefetchLeadTime` remains. Called
+    /// from the progress observer, which also fires when playback starts (covers short videos).
+    private func prefetchNextPlaylistItemIfNeeded() {
+        guard let queue = playlistQueue,
+              queue.currentIndex + 1 < queue.videoIds.count,
+              let player, let item = player.currentItem else { return }
+        let nextId = queue.videoIds[queue.currentIndex + 1]
+        if let existing = nextItemPrefetch, existing.videoId == nextId, !existing.isStale { return }
+        let duration = CMTimeGetSeconds(item.duration)
+        let current = CMTimeGetSeconds(player.currentTime())
+        guard duration.isFinite, current.isFinite,
+              duration - current <= Self.playlistPrefetchLeadTime else { return }
+
+        nextItemPrefetch?.task.cancel()
+        let task = Task { @MainActor () -> PreparedPlaylistItem? in
+            guard let prepared = try? await Self.preparePlaylistItem(videoId: nextId, queue: queue) else {
+                return nil
+            }
+            // Load the HLS master playlist now so the new item skips that round trip too.
+            _ = try? await prepared.asset.load(.isPlayable)
+            return prepared
+        }
+        nextItemPrefetch = PlaylistItemPrefetch(videoId: nextId, startedAt: Date(), task: task)
+        PlaybackLog.log.notice("prefetching next playlist item videoId=\(nextId, privacy: .public)")
+    }
+
+    /// Uses the prefetch when it's for this item and still fresh; otherwise prepares it now.
+    @MainActor
+    private func takePreparedPlaylistItem(videoId: String, queue: PlaylistPlaybackQueue) async throws -> PreparedPlaylistItem {
+        let prefetch = nextItemPrefetch
+        nextItemPrefetch = nil
+        if let prefetch, prefetch.videoId == videoId, !prefetch.isStale,
+           let prepared = await prefetch.task.value {
+            PlaybackLog.log.notice("using prefetched playlist item videoId=\(videoId, privacy: .public)")
+            return prepared
+        }
+        prefetch?.task.cancel()
+        return try await Self.preparePlaylistItem(videoId: videoId, queue: queue)
+    }
+
     // MARK: Watch history reporting
 
     private func startProgressReporting() {
@@ -1219,6 +1419,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         progressTimeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) {
             [weak self] _ in
             self?.reportCurrentTime()
+            self?.prefetchNextPlaylistItemIfNeeded()
         }
     }
 
@@ -1385,6 +1586,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     /// While Picture in Picture is active the full-screen controller is off-screen and
     /// must not take the player — assigning it there pauses playback.
     private func adoptPlayer(_ newPlayer: AVPlayer, controller: AVPlayerViewController) {
+        newPlayer.defaultRate = currentSpeed
         player = newPlayer
         if isInPictureInPicture {
             notePictureInPicturePlayerReplaced()
@@ -1533,6 +1735,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         savePlaybackPosition()
         player?.pause()
         statusObservation = nil
+        nextItemPrefetch?.task.cancel()
+        nextItemPrefetch = nil
         captions = []
         selectedCaptionLanguage = nil
         captionOverlayHost()?.clearCuesAndDisplay()
@@ -1574,10 +1778,28 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     private func presentSpeedMenu() {
         guard let vc = containerController ?? controller else { return }
         let alert = UIAlertController(title: "Speed", message: nil, preferredStyle: .actionSheet)
-        for speed in Self.speeds {
+        for speed in PlayerSettings.playbackSpeeds {
             let isCurrent = abs(speed - currentSpeed) < 0.001
-            let action = UIAlertAction(title: Self.menuTitle(speedLabel(speed), selected: isCurrent), style: .default) { [weak self] _ in
+            let action = UIAlertAction(title: Self.menuTitle(PlayerSettings.speedLabel(speed), selected: isCurrent), style: .default) { [weak self] _ in
                 self?.setSpeed(speed)
+            }
+            alert.addAction(action)
+            if isCurrent { alert.preferredAction = action }
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        vc.present(alert, animated: true)
+    }
+
+    private func presentChaptersMenu() {
+        guard let vc = containerController ?? controller, !chapters.isEmpty else { return }
+        let alert = UIAlertController(title: "Chapters", message: nil, preferredStyle: .actionSheet)
+        let now = player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
+        let currentIndex = chapters.chapterIndex(at: now.isFinite ? now : 0)
+        for (index, chapter) in chapters.enumerated() {
+            let isCurrent = index == currentIndex
+            let line = "\(TransportBarOverlayView.fmt(chapter.timecode))  \(chapter.title)"
+            let action = UIAlertAction(title: Self.menuTitle(line, selected: isCurrent), style: .default) { [weak self] _ in
+                self?.transportBar?.seek(to: chapter.timecode)
             }
             alert.addAction(action)
             if isCurrent { alert.preferredAction = action }
@@ -1682,6 +1904,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         captionOverlayHost()?.clearCuesAndDisplay()
 
         let newItem = AVPlayerItem(asset: asset)
+        newItem.externalMetadata = player?.currentItem?.externalMetadata ?? []
         if isHLSToMasterAuto {
             HLSPlaybackPreferences.applyPreferredMaximumResolution(nil, to: newItem)
         }
@@ -1753,6 +1976,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     private func setSpeed(_ speed: Float) {
         currentSpeed = speed
         transportBar?.preferredPlaybackRate = speed
+        player?.defaultRate = speed
         if let player, player.rate > 0 {
             player.rate = speed
         }
@@ -1783,9 +2007,9 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         }
     }
 
-    private func speedLabel(_ speed: Float) -> String {
-        if speed == 1.0 { return "Normal" }
-        if speed == Float(Int(speed)) { return "\(Int(speed))x" }
-        return "\(speed)x"
+    /// Shows the speed pill when a video starts at a non-1x default speed.
+    private func announceStartingSpeedIfNeeded() {
+        guard abs(currentSpeed - 1.0) > 0.001 else { return }
+        transportBar?.showSpeedNotification(PlayerSettings.speedLabel(currentSpeed))
     }
 }

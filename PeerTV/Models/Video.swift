@@ -453,18 +453,9 @@ struct Video: Decodable, Identifiable, Hashable {
     }
 
     var relativeDate: String? {
-        guard let dateStr = publishedAt ?? createdAt else { return nil }
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = iso.date(from: dateStr) ?? {
-            let basic = ISO8601DateFormatter()
-            basic.formatOptions = [.withInternetDateTime]
-            return basic.date(from: dateStr)
-        }()
-        guard let date else { return nil }
-        let rel = RelativeDateTimeFormatter()
-        rel.unitsStyle = .full
-        return rel.localizedString(for: date, relativeTo: Date())
+        guard let dateStr = publishedAt ?? createdAt,
+              let date = PeerTubeDate.parse(dateStr) else { return nil }
+        return PeerTubeDate.relativeFull.localizedString(for: date, relativeTo: Date())
     }
 
     /// e.g. 1200 → "1.2K views", 2_500_000 → "2.5M views".
@@ -643,4 +634,59 @@ struct VideoFileTokenResponse: Decodable {
 
 struct VideoFileTokenData: Decodable {
     let token: String
+}
+
+/// `GET /api/v1/videos/{id}/chapters` (PeerTube 6+).
+struct VideoChapter: Decodable {
+    /// Start time in seconds.
+    let timecode: Double
+    let title: String
+}
+
+struct VideoChaptersResponse: Decodable {
+    let chapters: [VideoChapter]
+}
+
+extension Array where Element == VideoChapter {
+    /// Index of the chapter playing at `time`: the last one starting at or before it.
+    /// Expects the array sorted by `timecode`.
+    func chapterIndex(at time: TimeInterval) -> Int? {
+        lastIndex(where: { $0.timecode <= time })
+    }
+
+    func chapter(at time: TimeInterval) -> VideoChapter? {
+        chapterIndex(at: time).map { self[$0] }
+    }
+}
+
+/// Shared formatters for PeerTube's ISO 8601 timestamps; formatter creation is expensive and these
+/// run inside grid tile bodies.
+enum PeerTubeDate {
+    private static let fractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static let basic: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    static let relativeFull: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .full
+        return f
+    }()
+
+    static let relativeAbbreviated: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
+    static func parse(_ string: String) -> Date? {
+        fractional.date(from: string) ?? basic.date(from: string)
+    }
 }

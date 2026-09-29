@@ -16,6 +16,7 @@ final class ChannelDetailViewModel: ObservableObject {
     private var videosTotal: Int?
     private var apiClient: PeerTubeAPIClient?
     private var isAuthenticated = false
+    private var canSeeAllVideos = false
     private var currentUsername: String?
     let handle: String
 
@@ -24,13 +25,18 @@ final class ChannelDetailViewModel: ObservableObject {
         return currentUsername == ownerName
     }
 
+    private var includeAllPrivacyForListing: Bool {
+        isOwnChannel && isAuthenticated && canSeeAllVideos
+    }
+
     init(handle: String) {
         self.handle = handle
     }
 
-    func configure(apiClient: PeerTubeAPIClient, isAuthenticated: Bool, currentUsername: String?) {
+    func configure(apiClient: PeerTubeAPIClient, isAuthenticated: Bool, canSeeAllVideos: Bool, currentUsername: String?) {
         self.apiClient = apiClient
         self.isAuthenticated = isAuthenticated
+        self.canSeeAllVideos = canSeeAllVideos
         self.currentUsername = currentUsername
     }
 
@@ -47,7 +53,6 @@ final class ChannelDetailViewModel: ObservableObject {
 
         do {
             channel = try await apiClient.request(.channelDetail(handle: handle))
-            let includeAllPrivacyForListing = isOwnChannel && isAuthenticated
             async let vids: PaginatedResponse<Video> = apiClient.request(
                 .channelVideos(handle: handle, start: 0, count: pageSize, sort: "-publishedAt", includeAllPrivacy: includeAllPrivacyForListing)
             )
@@ -76,7 +81,6 @@ final class ChannelDetailViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
-            let includeAllPrivacyForListing = isOwnChannel && isAuthenticated
             let resp: PaginatedResponse<Video> = try await apiClient.request(
                 .channelVideos(handle: handle, start: videosStart, count: pageSize, sort: "-publishedAt", includeAllPrivacy: includeAllPrivacyForListing)
             )

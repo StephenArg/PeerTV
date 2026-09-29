@@ -41,18 +41,8 @@ struct VideoComment: Decodable, Hashable, Identifiable {
     }
 
     var relativeDateLabel: String? {
-        guard let dateStr = createdAt else { return nil }
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = iso.date(from: dateStr) ?? {
-            let basic = ISO8601DateFormatter()
-            basic.formatOptions = [.withInternetDateTime]
-            return basic.date(from: dateStr)
-        }()
-        guard let date else { return nil }
-        let rel = RelativeDateTimeFormatter()
-        rel.unitsStyle = .abbreviated
-        return rel.localizedString(for: date, relativeTo: Date())
+        guard let dateStr = createdAt, let date = PeerTubeDate.parse(dateStr) else { return nil }
+        return PeerTubeDate.relativeAbbreviated.localizedString(for: date, relativeTo: Date())
     }
 
     private enum CodingKeys: String, CodingKey {

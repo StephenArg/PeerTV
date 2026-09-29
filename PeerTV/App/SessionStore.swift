@@ -163,8 +163,9 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         .sorted { $0.lastUsedAt > $1.lastUsedAt }
     }
 
-    /// When true, global `/videos` may use broad privacy/`include` filters (staff only on typical instances).
-    var useBroadHomeVideoListing: Bool {
+    /// Admin/moderator — the roles PeerTube grants `SEE_ALL_VIDEOS`. Video list/search requests may only
+    /// send `include` or non-public `privacyOneOf` filters when this is true; otherwise PeerTube returns 401.
+    var canSeeAllVideos: Bool {
         phase == .authenticated && (userRole?.isAdministratorOrModerator == true)
     }
 
@@ -527,33 +528,14 @@ final class SessionStore: ObservableObject, AccountLoginHost {
             let user: UserMe = try await apiClient.request(.usersMe)
             applyUserMe(user)
             Self.log.notice("loadUsername OK username=\(user.username, privacy: .public) roleId=\(user.role?.id.map(String.init) ?? "nil")")
+        } catch APIError.unauthorized {
+            // A 401 already went through the account's shared refresh (`TokenRefreshCoordinator`);
+            // this means the server rejected the refresh token, so the session is over.
+            Self.log.error("loadUsername: session rejected after refresh; invalidating session")
+            invalidateSession()
         } catch {
-            Self.log.error("loadUsername failed: \(error.localizedDescription, privacy: .public) type=\(String(describing: type(of: error)), privacy: .public) — attempting OAuth refresh path")
-            if await refreshAndRetry() == false {
-                Self.log.error("loadUsername: refresh path failed; invalidating session")
-                invalidateSession()
-            }
-        }
-    }
-
-    /// Returns true if refresh succeeded.
-    private func refreshAndRetry() async -> Bool {
-        guard let refresh = tokenStore.refreshToken,
-              let base = baseURL else {
-            Self.log.error("refreshAndRetry: missing refresh token or base URL refreshPresent=\(self.tokenStore.refreshToken != nil) basePresent=\(self.baseURL != nil)")
-            return false
-        }
-        do {
-            Self.log.notice("refreshAndRetry: calling OAuthService.refreshToken host=\(base.host ?? base.absoluteString, privacy: .public)")
-            let tokens = try await oauthService.refreshToken(baseURL: base, refreshToken: refresh)
-            tokenStore.save(accessToken: tokens.accessToken, refreshToken: tokens.refreshToken)
-            let user: UserMe = try await apiClient.request(.usersMe)
-            applyUserMe(user)
-            Self.log.notice("refreshAndRetry succeeded username=\(user.username, privacy: .public) roleId=\(user.role?.id.map(String.init) ?? "nil")")
-            return true
-        } catch {
-            Self.log.error("refreshAndRetry failed: \(error.localizedDescription, privacy: .public) type=\(String(describing: type(of: error)), privacy: .public)")
-            return false
+            // Offline at launch, timeouts, server errors: keep the session for the next request.
+            Self.log.error("loadUsername failed; keeping session: \(error.localizedDescription, privacy: .public) type=\(String(describing: type(of: error)), privacy: .public)")
         }
     }
 

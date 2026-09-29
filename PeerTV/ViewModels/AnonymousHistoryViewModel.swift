@@ -10,8 +10,10 @@ final class AnonymousHistoryViewModel: ObservableObject {
     @Published var avatarURLByVideoId: [String: URL] = [:]
 
     private var storeCancellable: AnyCancellable?
+    private var store: AnonymousHistoryStore = .shared
 
     func bind(to store: AnonymousHistoryStore = .shared) {
+        self.store = store
         storeCancellable?.cancel()
         storeCancellable = store.$entries
             .receive(on: DispatchQueue.main)
@@ -19,6 +21,14 @@ final class AnonymousHistoryViewModel: ObservableObject {
                 self?.apply(entries: entries)
             }
         apply(entries: store.entries)
+    }
+
+    func remove(_ video: Video) {
+        store.remove(videoId: video.stableId)
+    }
+
+    func clearAll() {
+        store.removeAllEntries()
     }
 
     private func apply(entries: [AnonymousHistoryEntry]) {

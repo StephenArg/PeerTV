@@ -1,5 +1,11 @@
 import Foundation
 
+extension Notification.Name {
+    /// Posted on the main thread when saved positions are removed outside the player, so tiles can
+    /// drop their progress bars. `userInfo["videoId"]` names the video; absent means many changed.
+    static let peerTVPlaybackPositionsRemoved = Notification.Name("PeerTV.playbackPositionsRemoved")
+}
+
 /// Persists video playback positions so users can resume where they left off.
 /// Positions are stored per-account to keep servers isolated.
 enum PlaybackPositionStore {
@@ -15,6 +21,11 @@ enum PlaybackPositionStore {
 
     /// If playback is within this fraction of the start, treat as not started — no resume UI / seek.
     static let startedThreshold: Double = 0.03
+
+    /// In-memory copy of the `positionsKey` dictionary. Tiles read positions on every appearance, and
+    /// `UserDefaults.dictionary(forKey:)` copies and bridges the whole dictionary each call.
+    private static var cachedPositions: [String: Double]?
+    private static let cacheLock = NSLock()
 
     /// Whether resume playback is enabled. Defaults to true.
     static var isEnabled: Bool {
@@ -33,8 +44,7 @@ enum PlaybackPositionStore {
     static func position(for videoId: String, accountId: UUID) -> TimeInterval? {
         guard isEnabled else { return nil }
         let key = storageKey(videoId: videoId, accountId: accountId)
-        let dict = UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double] ?? [:]
-        return dict[key]
+        return loadPositions()[key]
     }
 
     /// Returns watch progress as a fraction of total duration (0...1) for thumbnail display.
@@ -67,19 +77,19 @@ enum PlaybackPositionStore {
     static func save(position: TimeInterval, duration: TimeInterval, videoId: String, accountId: UUID) {
         guard isEnabled else { return }
         let key = storageKey(videoId: videoId, accountId: accountId)
-        var dict = UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double] ?? [:]
+        var dict = loadPositions()
 
         if duration > 0 {
             let remaining = duration - position
             let endThreshold = duration * finishedThreshold
             if remaining <= endThreshold {
                 dict.removeValue(forKey: key)
-                UserDefaults.standard.set(dict, forKey: positionsKey)
+                storePositions(dict)
                 return
             }
             if position / duration < startedThreshold {
                 dict.removeValue(forKey: key)
-                UserDefaults.standard.set(dict, forKey: positionsKey)
+                storePositions(dict)
                 return
             }
         }
@@ -89,28 +99,32 @@ enum PlaybackPositionStore {
         } else {
             dict.removeValue(forKey: key)
         }
-        UserDefaults.standard.set(dict, forKey: positionsKey)
+        storePositions(dict)
     }
 
     /// Removes the saved position for a video (e.g., when video finishes).
     static func remove(videoId: String, accountId: UUID) {
         let key = storageKey(videoId: videoId, accountId: accountId)
-        var dict = UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double] ?? [:]
+        var dict = loadPositions()
         dict.removeValue(forKey: key)
-        UserDefaults.standard.set(dict, forKey: positionsKey)
+        storePositions(dict)
+        NotificationCenter.default.post(name: .peerTVPlaybackPositionsRemoved, object: nil, userInfo: ["videoId": videoId])
     }
 
     /// Removes all saved playback positions.
     static func clearAll() {
+        cacheLock.lock()
+        cachedPositions = [:]
+        cacheLock.unlock()
         UserDefaults.standard.removeObject(forKey: positionsKey)
+        NotificationCenter.default.post(name: .peerTVPlaybackPositionsRemoved, object: nil)
     }
 
     /// Removes saved positions for one account namespace (e.g. anonymous session on sign-out).
     static func clearAll(for accountId: UUID) {
         let prefix = "\(accountId.uuidString):"
-        var dict = UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double] ?? [:]
-        dict = dict.filter { !$0.key.hasPrefix(prefix) }
-        UserDefaults.standard.set(dict, forKey: positionsKey)
+        storePositions(loadPositions().filter { !$0.key.hasPrefix(prefix) })
+        NotificationCenter.default.post(name: .peerTVPlaybackPositionsRemoved, object: nil)
     }
 
     /// Clears anonymous-session resume data.
@@ -120,18 +134,32 @@ enum PlaybackPositionStore {
 
     /// Returns the count of saved positions (for display in settings).
     static var savedPositionCount: Int {
-        let dict = UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double] ?? [:]
         let anonymousPrefix = "\(anonymousAccountId.uuidString):"
-        return dict.filter { !$0.key.hasPrefix(anonymousPrefix) }.count
+        return loadPositions().filter { !$0.key.hasPrefix(anonymousPrefix) }.count
     }
 
     static func savedPositionCount(for accountId: UUID) -> Int {
         let prefix = "\(accountId.uuidString):"
-        let dict = UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double] ?? [:]
-        return dict.filter { $0.key.hasPrefix(prefix) }.count
+        return loadPositions().filter { $0.key.hasPrefix(prefix) }.count
     }
 
     private static func storageKey(videoId: String, accountId: UUID) -> String {
         "\(accountId.uuidString):\(videoId)"
+    }
+
+    private static func loadPositions() -> [String: Double] {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let cachedPositions { return cachedPositions }
+        let dict = UserDefaults.standard.dictionary(forKey: positionsKey) as? [String: Double] ?? [:]
+        cachedPositions = dict
+        return dict
+    }
+
+    private static func storePositions(_ dict: [String: Double]) {
+        cacheLock.lock()
+        cachedPositions = dict
+        cacheLock.unlock()
+        UserDefaults.standard.set(dict, forKey: positionsKey)
     }
 }

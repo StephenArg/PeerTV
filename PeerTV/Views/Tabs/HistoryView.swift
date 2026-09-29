@@ -5,10 +5,14 @@ struct HistoryView: View {
     @StateObject private var vm = HistoryViewModel()
     @StateObject private var anonymousVM = AnonymousHistoryViewModel()
     @State private var detailVideoId: String = ""
+    /// The tile that opened the detail screen, so its "Remove from History" action knows the row.
+    @State private var detailVideo: Video?
     @State private var detailOriginHost: String?
     @State private var detailCommentReadHost: String?
     @State private var showDetail = false
     @State private var didLongPress = false
+    @State private var showClearConfirm = false
+    @State private var historyActionError: String?
     /// False when another tab is selected so we do not scroll/focus this grid when the player dismisses from elsewhere.
     @State private var isHistoryGridOnScreen = false
     @FocusState private var historyGridFocusVideoId: String?
@@ -37,10 +41,30 @@ struct HistoryView: View {
         ScrollViewReader { scrollProxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 30) {
-                    Text("History")
-                        .font(.title3)
-                        .bold()
-                        .padding(.horizontal, 50)
+                    HStack(alignment: .center, spacing: 28) {
+                        Text("History")
+                            .font(.title3)
+                            .bold()
+
+                        Spacer()
+
+                        if !displayVideos.isEmpty {
+                            Button {
+                                showClearConfirm = true
+                            } label: {
+                                HStack(spacing: 20) {
+                                    Image(systemName: "trash")
+                                    Text("Clear History")
+                                        .lineLimit(1)
+                                }
+                                .font(.callout)
+                                .padding(.horizontal, 48)
+                                .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.card)
+                        }
+                    }
+                    .padding(.horizontal, 50)
 
                     LazyVGrid(columns: columns, spacing: 50) {
                         ForEach(displayVideos, id: \.stableId) { video in
@@ -68,6 +92,7 @@ struct HistoryView: View {
                                     .onEnded { _ in
                                         didLongPress = true
                                         detailVideoId = video.stableId
+                                        detailVideo = video
                                         if session.isAnonymous {
                                             detailOriginHost = anonymousVM.originHostByVideoId[video.stableId]
                                             detailCommentReadHost = anonymousVM.commentReadHostByVideoId[video.stableId]
@@ -125,8 +150,30 @@ struct HistoryView: View {
             VideoDetailView(
                 videoId: detailVideoId,
                 originHost: detailOriginHost,
-                commentReadHost: detailCommentReadHost
+                commentReadHost: detailCommentReadHost,
+                onRemoveFromHistory: removeFromHistoryAction(for: detailVideo)
             )
+        }
+        .confirmationDialog(
+            "Clear your watch history?",
+            isPresented: $showClearConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Clear History", role: .destructive) {
+                clearHistory()
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert(
+            "Couldn’t update history",
+            isPresented: Binding(
+                get: { historyActionError != nil },
+                set: { if !$0 { historyActionError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(historyActionError ?? "")
         }
         .onAppear { isHistoryGridOnScreen = true }
         .onDisappear { isHistoryGridOnScreen = false }
@@ -146,6 +193,51 @@ struct HistoryView: View {
                 Task { await vm.loadInitial() }
             }
         }
+    }
+
+    /// `nil` hides the action: signed-in removal needs the numeric id the history API takes.
+    /// Like PeerTube's web client, removing a video from history also drops its resume point.
+    private func removeFromHistoryAction(for video: Video?) -> (() -> Void)? {
+        guard let video else { return nil }
+        let accountId = session.playbackAccountId
+        if session.isAnonymous {
+            return {
+                anonymousVM.remove(video)
+                forgetResumePosition(of: video, accountId: accountId)
+            }
+        }
+        guard video.id != nil else { return nil }
+        return {
+            Task {
+                if await vm.remove(video) {
+                    forgetResumePosition(of: video, accountId: accountId)
+                } else {
+                    historyActionError = "The video couldn’t be removed from your history. Try again later."
+                }
+            }
+        }
+    }
+
+    /// Also clears every resume point for the account, matching PeerTube's web client.
+    private func clearHistory() {
+        let accountId = session.playbackAccountId
+        if session.isAnonymous {
+            anonymousVM.clearAll()
+            if let accountId { PlaybackPositionStore.clearAll(for: accountId) }
+            return
+        }
+        Task {
+            if await vm.clearAll() {
+                if let accountId { PlaybackPositionStore.clearAll(for: accountId) }
+            } else {
+                historyActionError = "Your history couldn’t be cleared. Try again later."
+            }
+        }
+    }
+
+    private func forgetResumePosition(of video: Video, accountId: UUID?) {
+        guard let accountId else { return }
+        PlaybackPositionStore.remove(videoId: video.stableId, accountId: accountId)
     }
 
     private func playVideo(_ video: Video) {

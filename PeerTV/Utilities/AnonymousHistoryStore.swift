@@ -155,6 +155,16 @@ final class AnonymousHistoryStore: ObservableObject {
         entries.insert(entry, at: 0)
     }
 
+    func remove(videoId: String) {
+        entries.removeAll { $0.videoId == videoId }
+    }
+
+    /// Clears the list. Staged tile snapshots are kept: they belong to a player that may still be
+    /// open in Picture in Picture, and finalizing one for a removed row is a no-op.
+    func removeAllEntries() {
+        entries = []
+    }
+
     /// Media host serves thumbnails; index host (e.g. peertube.watch) is for comments only.
     private static func assetHosts(for video: Video, apiHosts: [String]) -> (media: String?, index: String?) {
         let hosts = normalizedHosts(from: apiHosts.isEmpty ? video.federatedAPIHosts : apiHosts)

@@ -165,6 +165,7 @@ struct ChannelDetailView: View {
             vm.configure(
                 apiClient: session.apiClient,
                 isAuthenticated: session.phase == .authenticated,
+                canSeeAllVideos: session.canSeeAllVideos,
                 currentUsername: session.username.isEmpty ? nil : session.username
             )
             await vm.loadInitialIfEmpty()

@@ -25,6 +25,7 @@ enum Endpoint {
     case videoFileToken(id: String)
     case videoStoryboards(id: String)
     case videoCaptions(id: String)
+    case videoChapters(id: String)
     case videoCommentThreads(videoId: String, start: Int, count: Int, sort: String)
     case videoCommentThreadDetail(videoId: String, threadId: Int)
     case postVideoComment(videoId: String, text: String)
@@ -41,6 +42,9 @@ enum Endpoint {
 
     // History (auth required)
     case myHistory(start: Int, count: Int)
+    /// Numeric `Video.id`; the history routes don't accept UUIDs.
+    case removeHistoryVideo(videoId: Int)
+    case clearHistory
 
     // Playlists
     case videoPlaylists(start: Int, count: Int)
@@ -73,7 +77,7 @@ enum Endpoint {
     case watchVideo(id: String, currentTime: Int)
 
     // Search
-    case searchVideos(search: String, start: Int, count: Int, scope: SearchVideosScope = .instance)
+    case searchVideos(search: String, start: Int, count: Int, scope: SearchVideosScope = .instance, includeAllPrivacy: Bool = false)
 
     // Plugins
     case randomVideos
@@ -98,6 +102,8 @@ enum Endpoint {
             return "/api/v1/videos/\(id)/storyboards"
         case .videoCaptions(let id):
             return "/api/v1/videos/\(id)/captions"
+        case .videoChapters(let id):
+            return "/api/v1/videos/\(id)/chapters"
         case .videoCommentThreads(let id, _, _, _), .postVideoComment(let id, _):
             return "/api/v1/videos/\(id)/comment-threads"
         case .videoCommentThreadDetail(let id, let threadId):
@@ -116,6 +122,10 @@ enum Endpoint {
             return "/api/v1/users/me/subscriptions/videos"
         case .myHistory:
             return "/api/v1/users/me/history/videos"
+        case .removeHistoryVideo(let videoId):
+            return "/api/v1/users/me/history/videos/\(videoId)"
+        case .clearHistory:
+            return "/api/v1/users/me/history/videos/remove"
         case .videoPlaylists:
             return "/api/v1/video-playlists"
         case .videoPlaylistPrivacies:
@@ -191,12 +201,12 @@ enum Endpoint {
             return paging(start: start, count: count)
         case .playlistVideos(_, let start, let count):
             return paging(start: start, count: count)
-        case .searchVideos(let search, let start, let count, let scope):
+        case .searchVideos(let search, let start, let count, let scope, let includeAllPrivacy):
             var items = paging(start: start, count: count)
                 + [URLQueryItem(name: "search", value: search)]
             switch scope {
             case .instance:
-                items.append(contentsOf: allPrivacyItems())
+                if includeAllPrivacy { items.append(contentsOf: allPrivacyItems()) }
             case .global:
                 items.append(URLQueryItem(name: "sort", value: "-match"))
                 items.append(URLQueryItem(name: "nsfw", value: "false"))
@@ -218,11 +228,11 @@ enum Endpoint {
     var method: String {
         switch self {
         case .usersToken, .addVideoToPlaylist, .subscribe, .reorderPlaylistVideos,
-             .videoFileToken, .postVideoComment:
+             .videoFileToken, .postVideoComment, .clearHistory:
             return "POST"
         case .rateVideo, .watchVideo:
             return "PUT"
-        case .unsubscribe, .removePlaylistElement, .deletePlaylist, .deleteVideo:
+        case .unsubscribe, .removePlaylistElement, .deletePlaylist, .deleteVideo, .removeHistoryVideo:
             return "DELETE"
         default:
             return "GET"
@@ -247,6 +257,9 @@ enum Endpoint {
             return try? JSONSerialization.data(withJSONObject: ["currentTime": currentTime])
         case .postVideoComment(_, let text):
             return try? JSONSerialization.data(withJSONObject: ["text": text])
+        case .clearHistory:
+            // Optional `beforeDate`; an empty object clears everything.
+            return try? JSONSerialization.data(withJSONObject: [String: Any]())
         default:
             return nil
         }
@@ -254,7 +267,7 @@ enum Endpoint {
 
     var requiresAuth: Bool {
         switch self {
-        case .mySubscriptions, .mySubscriptionVideos, .myHistory, .usersMe,
+        case .mySubscriptions, .mySubscriptionVideos, .myHistory, .removeHistoryVideo, .clearHistory, .usersMe,
              .myVideoRating, .rateVideo, .addVideoToPlaylist,
              .removePlaylistElement, .reorderPlaylistVideos, .deletePlaylist,
              .deleteVideo,
@@ -298,10 +311,10 @@ extension Endpoint {
             return "GET /api/v1/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy) scope=\(scope) categories=\(categoryIds.count)"
         case .channelVideos(let handle, let start, let count, let sort, let includeAllPrivacy):
             return "GET …/video-channels/\(handle)/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy)"
-        case .searchVideos(let search, let start, let count, let scope):
+        case .searchVideos(let search, let start, let count, let scope, let includeAllPrivacy):
             let q = String(search.prefix(64))
             let scopeLabel = scope == .global ? "global" : "instance"
-            return "GET /api/v1/search/videos q=\(q) start=\(start) count=\(count) scope=\(scopeLabel)"
+            return "GET /api/v1/search/videos q=\(q) start=\(start) count=\(count) scope=\(scopeLabel) includeAllPrivacy=\(includeAllPrivacy)"
         case .subscriptionExist(let uri):
             return "GET …/subscriptions/exist uri=\(String(uri.prefix(120)))"
         case .subscribe(let uri):

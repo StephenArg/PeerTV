@@ -46,6 +46,7 @@ final class SearchViewModel: ObservableObject {
     private var currentStart = 0
     private var total: Int?
     private var instanceClient: PeerTubeAPIClient?
+    private var includeAllPrivacy = false
     private var globalClient: PeerTubeAPIClient { PeerTubeOriginClients.sepiaSearch }
     private(set) var activeQuery = ""
 
@@ -54,8 +55,9 @@ final class SearchViewModel: ObservableObject {
     private var searchGeneration = 0
     private var suggestionGeneration = 0
 
-    func configure(instanceClient: PeerTubeAPIClient) {
+    func configure(instanceClient: PeerTubeAPIClient, includeAllPrivacy: Bool) {
         self.instanceClient = instanceClient
+        self.includeAllPrivacy = includeAllPrivacy
     }
 
     var canLoadMore: Bool {
@@ -123,7 +125,8 @@ final class SearchViewModel: ObservableObject {
                     search: trimmed,
                     start: 0,
                     count: pageSize,
-                    scope: mode.searchScope
+                    scope: mode.searchScope,
+                    includeAllPrivacy: includeAllPrivacy
                 )
             )
             guard searchGeneration == generation, activeQuery == trimmed, mode == searchMode else { return }
@@ -154,7 +157,8 @@ final class SearchViewModel: ObservableObject {
                     search: trimmed,
                     start: 0,
                     count: suggestionCount,
-                    scope: mode.searchScope
+                    scope: mode.searchScope,
+                    includeAllPrivacy: includeAllPrivacy
                 )
             )
             guard suggestionGeneration == generation, mode == searchMode else { return }
@@ -177,7 +181,8 @@ final class SearchViewModel: ObservableObject {
                     search: activeQuery,
                     start: currentStart,
                     count: pageSize,
-                    scope: scope
+                    scope: scope,
+                    includeAllPrivacy: includeAllPrivacy
                 )
             )
             total = response.total

@@ -18,6 +18,8 @@ private enum TransportBarMetrics {
     /// Resume save/resume dead-zone tick marks on the scrubber (3% / 7%-from-end boundaries).
     static let resumeThresholdMarkerWidth: CGFloat = 2
     static let resumeThresholdMarkerHeight: CGFloat = 15
+    /// Dark gap cut into the track at each chapter start.
+    static let chapterGapWidth: CGFloat = 4
     static let trackHitHeight: CGFloat = 40
     static let sideInset: CGFloat = 80
     static let bottomInset: CGFloat = 110
@@ -95,6 +97,9 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
     private let startThresholdMarker = UIView()
     private let endThresholdMarker = UIView()
     private let playheadDot = UIView()
+    /// Chapter gaps, paired with their start times. They live inside `trackContainer` (so they
+    /// clip to its rounded ends and fade with it) and are positioned by frame in `updateFill`.
+    private var chapterMarkers: [(time: TimeInterval, view: UIView)] = []
 
     private var bufferedWidthConstraint: NSLayoutConstraint!
     private var playedWidthConstraint: NSLayoutConstraint!
@@ -139,6 +144,8 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
     var bufferedTime: TimeInterval = 0 { didSet { updateFill() } }
     var scrubPreviewTime: TimeInterval? { didSet { updateFill() } }
     var isScrubbing: Bool = false { didSet { updateFill() } }
+    /// Chapter start times in seconds. A chapter starting at 0 gets no gap.
+    var chapterStartTimes: [TimeInterval] = [] { didSet { rebuildChapterMarkers() } }
 
     override var canBecomeFocused: Bool { isUserInteractionEnabled && isEnabled }
 
@@ -455,6 +462,21 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
         marker.isHidden = true
     }
 
+    private func rebuildChapterMarkers() {
+        chapterMarkers.forEach { $0.view.removeFromSuperview() }
+        chapterMarkers = chapterStartTimes.filter { $0 > 0 }.map { time in
+            let gap = UIView()
+            gap.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+            gap.isUserInteractionEnabled = false
+            gap.isHidden = true
+            // Follows the track's focus height animation without a relayout.
+            gap.autoresizingMask = .flexibleHeight
+            trackContainer.addSubview(gap)
+            return (time, gap)
+        }
+        updateFill()
+    }
+
     private func updateFill() {
         let d = duration
         guard d.isFinite, d > 0 else {
@@ -462,6 +484,7 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
             playedWidthConstraint.constant = 0
             startThresholdMarker.isHidden = true
             endThresholdMarker.isHidden = true
+            chapterMarkers.forEach { $0.view.isHidden = true }
             return
         }
         let trackW = trackContainer.bounds.width
@@ -476,6 +499,18 @@ final class FocusableTrackControl: UIControl, UIGestureRecognizerDelegate {
         endMarkerCenterX.constant = trackW * CGFloat(1 - PlaybackPositionStore.finishedThreshold)
         startThresholdMarker.isHidden = false
         endThresholdMarker.isHidden = false
+
+        let gapWidth = TransportBarMetrics.chapterGapWidth
+        let trackH = trackContainer.bounds.height
+        for marker in chapterMarkers {
+            guard marker.time < d else {
+                marker.view.isHidden = true
+                continue
+            }
+            let x = trackW * CGFloat(marker.time / d)
+            marker.view.frame = CGRect(x: x - gapWidth / 2, y: 0, width: gapWidth, height: trackH)
+            marker.view.isHidden = false
+        }
     }
 }
 
@@ -613,6 +648,7 @@ final class TransportBarOverlayView: UIView {
     let skipNextButton: UIButton
     let speedButton: UIButton
     let captionsButton: UIButton
+    let chaptersButton: UIButton
     let pictureInPictureButton: UIButton
     let addToPlaylistButton: UIButton
     let currentTimeLabel = UILabel()
@@ -639,6 +675,11 @@ final class TransportBarOverlayView: UIView {
     /// Shown when the video has at least one caption track (PeerTube).
     var showsCaptionsButton: Bool = false {
         didSet { captionsButton.isHidden = !showsCaptionsButton }
+    }
+
+    /// Shown when the video has chapters (PeerTube 6+).
+    var showsChaptersButton: Bool = false {
+        didSet { chaptersButton.isHidden = !showsChaptersButton }
     }
 
     /// Shown when Picture in Picture is supported on this device.
@@ -684,6 +725,7 @@ final class TransportBarOverlayView: UIView {
         self.skipNextButton = Self.makeIconButton(symbol: "forward.end")
         self.speedButton = Self.makeIconButton(symbol: "gauge.with.dots.needle.67percent")
         self.captionsButton = Self.makeIconButton(symbol: "captions.bubble")
+        self.chaptersButton = Self.makeIconButton(symbol: "list.bullet.rectangle")
         self.pictureInPictureButton = Self.makeIconButton(symbol: "pip.enter")
         self.addToPlaylistButton = Self.makeIconButton(symbol: "text.badge.plus")
         super.init(frame: frame)
@@ -729,12 +771,15 @@ final class TransportBarOverlayView: UIView {
         buttonStack.addArrangedSubview(skipNextButton)
         buttonStack.addArrangedSubview(speedButton)
         buttonStack.addArrangedSubview(captionsButton)
+        buttonStack.addArrangedSubview(chaptersButton)
         buttonStack.addArrangedSubview(pictureInPictureButton)
         buttonStack.addArrangedSubview(addToPlaylistButton)
         skipNextButton.isHidden = true
         skipNextButton.accessibilityLabel = "Play next in playlist"
         captionsButton.isHidden = true
         captionsButton.accessibilityLabel = "Captions"
+        chaptersButton.isHidden = true
+        chaptersButton.accessibilityLabel = "Chapters"
         pictureInPictureButton.isHidden = true
         pictureInPictureButton.accessibilityLabel = "Picture in Picture"
         addToPlaylistButton.isHidden = true
@@ -873,7 +918,7 @@ final class TransportBarOverlayView: UIView {
         return String(format: "%.1f KB/s", bytesPerSecond / 1_000)
     }
 
-    private static func fmt(_ seconds: TimeInterval) -> String {
+    static func fmt(_ seconds: TimeInterval) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "0:00" }
         let total = Int(seconds.rounded(.down))
         let h = total / 3600
@@ -890,6 +935,9 @@ final class TransportBarOverlayView: UIView {
 final class ThumbnailPreviewView: UIView {
 
     private let imageView = UIImageView()
+    /// Chapter title pill drawn just above the frame (outside the view's bounds).
+    private let captionBackground = UIView()
+    private let captionLabel = UILabel()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -916,13 +964,33 @@ final class ThumbnailPreviewView: UIView {
         imageView.layer.borderColor = UIColor.white.withAlphaComponent(0.9).cgColor
         addSubview(imageView)
 
+        captionBackground.translatesAutoresizingMaskIntoConstraints = false
+        captionBackground.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+        captionBackground.layer.cornerRadius = 10
+        captionBackground.isHidden = true
+        addSubview(captionBackground)
+
+        captionLabel.translatesAutoresizingMaskIntoConstraints = false
+        captionLabel.textColor = .white
+        captionLabel.font = .systemFont(ofSize: 24, weight: .semibold).rounded()
+        captionLabel.lineBreakMode = .byTruncatingTail
+        captionBackground.addSubview(captionLabel)
+
         NSLayoutConstraint.activate([
             imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
             imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
             imageView.topAnchor.constraint(equalTo: topAnchor),
             imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
             imageView.widthAnchor.constraint(equalToConstant: TransportBarMetrics.thumbnailWidth),
-            imageView.heightAnchor.constraint(equalToConstant: TransportBarMetrics.thumbnailHeight)
+            imageView.heightAnchor.constraint(equalToConstant: TransportBarMetrics.thumbnailHeight),
+
+            captionBackground.centerXAnchor.constraint(equalTo: centerXAnchor),
+            captionBackground.bottomAnchor.constraint(equalTo: imageView.topAnchor, constant: -10),
+            captionBackground.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor),
+            captionLabel.leadingAnchor.constraint(equalTo: captionBackground.leadingAnchor, constant: 14),
+            captionLabel.trailingAnchor.constraint(equalTo: captionBackground.trailingAnchor, constant: -14),
+            captionLabel.topAnchor.constraint(equalTo: captionBackground.topAnchor, constant: 6),
+            captionLabel.bottomAnchor.constraint(equalTo: captionBackground.bottomAnchor, constant: -6)
         ])
     }
 
@@ -930,8 +998,15 @@ final class ThumbnailPreviewView: UIView {
         imageView.image = image
     }
 
+    /// Chapter title for the previewed time; `nil` or empty hides the pill.
+    func setCaption(_ text: String?) {
+        captionLabel.text = text
+        captionBackground.isHidden = text?.isEmpty ?? true
+    }
+
     func clear() {
         imageView.image = nil
+        setCaption(nil)
     }
 }
 
@@ -1387,6 +1462,9 @@ final class TransportBarController: NSObject {
     /// before the `AVAssetImageGenerator` fallback — which does not work well on HLS past the
     /// currently-buffered range.
     var storyboardProvider: StoryboardThumbnailProvider?
+    /// Sorted by start time. Drives the scrubber gaps, the Chapters button, and the title shown
+    /// over the scrub thumbnail. Kept across `detach()` so quality switches don't drop it.
+    private var chapters: [VideoChapter] = []
 
     /// Fired on the main queue from the periodic time observer with the timeline time used for UI
     /// (scrub/skim preview when active, otherwise the player's current time).
@@ -1395,6 +1473,7 @@ final class TransportBarController: NSObject {
     private let onQualityTapped: () -> Void
     private let onSpeedTapped: () -> Void
     private let onCaptionsTapped: (() -> Void)?
+    private let onChaptersTapped: (() -> Void)?
     private let onPictureInPictureTapped: (() -> Void)?
     private let onSkipNextTapped: (() -> Void)?
     private let onAddToPlaylistTapped: (() -> Void)?
@@ -1451,6 +1530,7 @@ final class TransportBarController: NSObject {
         onQualityTapped: @escaping () -> Void,
         onSpeedTapped: @escaping () -> Void,
         onCaptionsTapped: (() -> Void)? = nil,
+        onChaptersTapped: (() -> Void)? = nil,
         onPictureInPictureTapped: (() -> Void)? = nil,
         onSkipNextTapped: (() -> Void)? = nil,
         onAddToPlaylistTapped: (() -> Void)? = nil,
@@ -1463,6 +1543,7 @@ final class TransportBarController: NSObject {
         self.onQualityTapped = onQualityTapped
         self.onSpeedTapped = onSpeedTapped
         self.onCaptionsTapped = onCaptionsTapped
+        self.onChaptersTapped = onChaptersTapped
         self.onPictureInPictureTapped = onPictureInPictureTapped
         self.onSkipNextTapped = onSkipNextTapped
         self.onAddToPlaylistTapped = onAddToPlaylistTapped
@@ -1479,6 +1560,7 @@ final class TransportBarController: NSObject {
         rootView.barView.qualityButton.addTarget(self, action: #selector(qualityPressed), for: .primaryActionTriggered)
         rootView.barView.speedButton.addTarget(self, action: #selector(speedPressed), for: .primaryActionTriggered)
         rootView.barView.captionsButton.addTarget(self, action: #selector(captionsPressed), for: .primaryActionTriggered)
+        rootView.barView.chaptersButton.addTarget(self, action: #selector(chaptersPressed), for: .primaryActionTriggered)
         rootView.barView.pictureInPictureButton.addTarget(self, action: #selector(pictureInPicturePressed), for: .primaryActionTriggered)
         rootView.barView.skipNextButton.addTarget(self, action: #selector(skipNextPressed), for: .primaryActionTriggered)
         rootView.barView.addToPlaylistButton.addTarget(self, action: #selector(addToPlaylistPressed), for: .primaryActionTriggered)
@@ -1508,6 +1590,13 @@ final class TransportBarController: NSObject {
 
     func setShowsCaptionsButton(_ show: Bool) {
         rootView.barView.showsCaptionsButton = show
+    }
+
+    /// Installs chapter markers and shows the Chapters button when the list is non-empty.
+    func setChapters(_ newChapters: [VideoChapter]) {
+        chapters = newChapters
+        rootView.barView.trackControl.chapterStartTimes = newChapters.map(\.timecode)
+        rootView.barView.showsChaptersButton = !newChapters.isEmpty
     }
 
     func setShowsPictureInPictureButton(_ show: Bool) {
@@ -1603,6 +1692,12 @@ final class TransportBarController: NSObject {
             items.append(.init(symbol: "captions.bubble", accessibilityLabel: "Captions") { [weak self] in
                 self?.hideQuickOptions()
                 self?.onCaptionsTapped?()
+            })
+        }
+        if bar.showsChaptersButton {
+            items.append(.init(symbol: "list.bullet.rectangle", accessibilityLabel: "Chapters") { [weak self] in
+                self?.hideQuickOptions()
+                self?.onChaptersTapped?()
             })
         }
         if bar.showsPictureInPictureButton {
@@ -1740,8 +1835,8 @@ final class TransportBarController: NSObject {
         thumbnailGenerator?.cancelAllCGImageGeneration()
         thumbnailGenerator = nil
         thumbnailCache.removeAll()
-        storyboardProvider = nil
-        onTimeUpdate = nil
+        // `storyboardProvider`, `chapters`, and `onTimeUpdate` belong to the video, not the
+        // player: quality switches detach/attach on the same video and must keep them.
         rootView.barView.thumbnailPreview.isHidden = true
         rootView.barView.thumbnailPreview.clear()
         if let periodicToken, let p = player {
@@ -1768,8 +1863,8 @@ final class TransportBarController: NSObject {
     }
 
     /// Shows a brief top-right pill reading e.g. "2x" or "1x". Called by the coordinator
-    /// after the Play/Pause hold gesture toggles the playback rate — only the hold path
-    /// triggers this; the Speed menu's selections do not.
+    /// after the Play/Pause hold gesture toggles the playback rate, and when a video starts at
+    /// a non-1x default speed. The Speed menu's selections do not show it.
     func showSpeedNotification(_ text: String) {
         rootView.showSpeedNotification(text)
     }
@@ -2240,6 +2335,7 @@ final class TransportBarController: NSObject {
             || rootView.barView.skipNextButton.isFocused
             || rootView.barView.speedButton.isFocused
             || rootView.barView.captionsButton.isFocused
+            || rootView.barView.chaptersButton.isFocused
             || rootView.barView.pictureInPictureButton.isFocused
             || rootView.barView.addToPlaylistButton.isFocused
     }
@@ -2519,6 +2615,11 @@ final class TransportBarController: NSObject {
         showBarAndResetTimer()
     }
 
+    @objc private func chaptersPressed() {
+        onChaptersTapped?()
+        showBarAndResetTimer()
+    }
+
     @objc private func pictureInPicturePressed() {
         print("[PiP] transport button pressed callback=\(onPictureInPictureTapped != nil)")
         onPictureInPictureTapped?()
@@ -2553,13 +2654,33 @@ final class TransportBarController: NSObject {
         guard let player else { return }
         let cur = CMTimeGetSeconds(player.currentTime())
         guard cur.isFinite else { return }
+        seek(to: cur + seconds)
+    }
+
+    /// Seeks to an absolute position (clamped to the item) and wakes the bar. Used for skips and
+    /// chapter jumps; a jump replaces any in-progress skim or staged visual scrub.
+    func seek(to seconds: TimeInterval) {
+        guard let player else { return }
         let d: Double = {
             guard let item = player.currentItem else { return 0 }
             let s = CMTimeGetSeconds(item.duration)
             return s.isFinite ? s : 0
         }()
-        var target = cur + seconds
+        var target = seconds
         if d > 0 { target = min(max(0, target), d) } else { target = max(0, target) }
+
+        if case .skimming = skimPhase {
+            skimTimer?.invalidate(); skimTimer = nil
+            skimPhase = .idle
+            commitSeekAndResume(target: target, resume: wasPlayingBeforeSkim, attempt: 1)
+            return
+        }
+        if pendingScrubCommit {
+            pendingScrubCommit = false
+            rootView.barView.trackControl.isScrubbing = false
+            rootView.barView.trackControl.scrubPreviewTime = nil
+            hideThumbnailPreview()
+        }
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         showBarAndResetTimer()
     }
@@ -2639,6 +2760,7 @@ final class TransportBarController: NSObject {
         let dur = rootView.barView.trackControl.duration
         guard dur.isFinite, dur > 0 else { return }
         rootView.barView.positionThumbnail(atTime: time, duration: dur)
+        rootView.barView.thumbnailPreview.setCaption(chapters.chapter(at: time)?.title)
         rootView.barView.thumbnailPreview.isHidden = false
         requestThumbnail(at: time)
     }

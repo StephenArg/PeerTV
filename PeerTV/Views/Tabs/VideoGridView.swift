@@ -280,7 +280,7 @@ struct VideoGridView: View {
             vm.configure(
                 apiClient: session.apiClient,
                 isAuthenticated: session.phase == .authenticated,
-                includeAllPrivacy: session.useBroadHomeVideoListing
+                includeAllPrivacy: session.canSeeAllVideos
             )
             if session.isAnonymous {
                 await vm.loadAnonymousFediverseHome()
@@ -293,12 +293,12 @@ struct VideoGridView: View {
             guard anonymous else { return }
             Task { await vm.loadAnonymousFediverseHome() }
         }
-        .onChange(of: session.useBroadHomeVideoListing) { _, _ in
+        .onChange(of: session.canSeeAllVideos) { _, _ in
             guard !session.isAnonymous else { return }
             vm.configure(
                 apiClient: session.apiClient,
                 isAuthenticated: session.phase == .authenticated,
-                includeAllPrivacy: session.useBroadHomeVideoListing
+                includeAllPrivacy: session.canSeeAllVideos
             )
             Task { await vm.loadInitial() }
         }
@@ -497,9 +497,9 @@ private struct PreviewControlHints: View {
 struct VideoCardView: View {
     @EnvironmentObject var session: SessionStore
     @Environment(\.isFocused) var isFocused
-    @ObservedObject private var downloadManager = DownloadManager.shared
     @State private var showPreviewControls = false
     @State private var watchProgressFraction: Double?
+    @State private var isDownloaded = false
     let video: Video
     var showOriginHost: Bool = false
     /// When set (e.g. anonymous history), use this URL directly instead of re-resolving paths.
@@ -593,9 +593,19 @@ struct VideoCardView: View {
             .frame(height: 120, alignment: .top)
         }
         .onAppear { refreshWatchProgress() }
+        .onReceive(DownloadManager.shared.$downloadedVideoIds) { ids in
+            let downloaded = ids.contains(video.stableId)
+            if downloaded != isDownloaded { isDownloaded = downloaded }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .peerTVPlayerDismissed)) { note in
             if let dismissedId = note.userInfo?["videoId"] as? String,
                dismissedId != video.stableId {
+                return
+            }
+            refreshWatchProgress()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .peerTVPlaybackPositionsRemoved)) { note in
+            if let removedId = note.userInfo?["videoId"] as? String, removedId != video.stableId {
                 return
             }
             refreshWatchProgress()
@@ -642,19 +652,19 @@ struct VideoCardView: View {
     }
 
     private var metadataLine: some View {
-        let isDownloaded = downloadManager.isDownloaded(video.stableId)
-        let hasViews = video.abbreviatedViewsLabel != nil
-        let hasLeadingMetadata = video.relativeDate != nil || hasViews
+        let relativeDate = video.relativeDate
+        let viewsLabel = video.abbreviatedViewsLabel
+        let hasLeadingMetadata = relativeDate != nil || viewsLabel != nil
 
         return HStack(spacing: 0) {
-            if let date = video.relativeDate {
-                Text(date)
+            if let relativeDate {
+                Text(relativeDate)
             }
-            if video.relativeDate != nil, hasViews {
+            if relativeDate != nil, viewsLabel != nil {
                 Text(" · ")
             }
-            if let label = video.abbreviatedViewsLabel {
-                Text(label)
+            if let viewsLabel {
+                Text(viewsLabel)
             }
             if hasLeadingMetadata, isDownloaded {
                 Text(" · ")

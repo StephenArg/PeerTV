@@ -79,6 +79,9 @@ final class HomeViewModel: ObservableObject {
     private var includeAllPrivacy = false
     private var fediverseHotLoaded = false
     private var fediverseRowEnrichmentInFlight = Set<String>()
+    /// Bumped by `loadInitial()`. Requests started under an older generation drop their results,
+    /// so a sort/scope/category change never shows rows fetched for the previous list.
+    private var loadGeneration = 0
 
     init() {
         if let saved = UserDefaults.standard.string(forKey: Self.sortDefaultsKey),
@@ -136,10 +139,12 @@ final class HomeViewModel: ObservableObject {
     }
 
     func loadInitial() async {
+        loadGeneration += 1
         currentStart = 0
         videos = []
         fediverseHotLoaded = false
         total = nil
+        isLoading = false
         await loadMore()
     }
 
@@ -157,12 +162,14 @@ final class HomeViewModel: ObservableObject {
             return
         }
         guard !isLoading else { return }
+        let generation = loadGeneration
 
         if currentListScope == .fediverseTrending {
             isLoading = true
-            defer { isLoading = false }
+            defer { if generation == loadGeneration { isLoading = false } }
             do {
                 let loaded = try await FediverseHotVideosResponse.fetchVideos(languageIds: fediverseLanguageIds)
+                guard generation == loadGeneration else { return }
                 videos = carryingOverEnrichment(into: loaded)
                 fediverseHotLoaded = true
                 total = loaded.count
@@ -175,7 +182,7 @@ final class HomeViewModel: ObservableObject {
 
         guard let apiClient else { return }
         isLoading = true
-        defer { isLoading = false }
+        defer { if generation == loadGeneration { isLoading = false } }
         // Refetch as many rows as are already loaded (API max 100) so a deep scroll position still exists.
         let count = min(max(pageSize, videos.count), 100)
         do {
@@ -189,6 +196,7 @@ final class HomeViewModel: ObservableObject {
                     categoryIds: selectedCategoryIds
                 )
             )
+            guard generation == loadGeneration else { return }
             var seen = Set<String>()
             videos = response.items.filter { seen.insert($0.stableId).inserted }
             total = response.total
@@ -218,9 +226,10 @@ final class HomeViewModel: ObservableObject {
             return
         }
         guard let apiClient, !isLoading, canLoadMore else { return }
+        let generation = loadGeneration
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        defer { if generation == loadGeneration { isLoading = false } }
 
         do {
             // Normal users: omit broad filters (many instances 401). Admin/moderator: may use all privacies per API.
@@ -234,12 +243,14 @@ final class HomeViewModel: ObservableObject {
                     categoryIds: selectedCategoryIds
                 )
             )
+            guard generation == loadGeneration else { return }
             total = response.total
             let existingIds = Set(videos.map(\.stableId))
             let unique = response.items.filter { !existingIds.contains($0.stableId) }
             videos.append(contentsOf: unique)
             currentStart += response.items.count
         } catch {
+            guard generation == loadGeneration else { return }
             Self.log.error("loadMore failed sort=\(self.sort, privacy: .public) authenticated=\(self.isAuthenticated) includeAllPrivacy=\(self.includeAllPrivacy) start=\(self.currentStart) error=\(error.localizedDescription, privacy: .public) underlying=\(String(describing: error), privacy: .public)")
             errorMessage = error.localizedDescription
         }
@@ -317,17 +328,20 @@ final class HomeViewModel: ObservableObject {
 
     private func loadFediverseHotIfNeeded() async {
         guard !fediverseHotLoaded, !isLoading else { return }
+        let generation = loadGeneration
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
+        defer { if generation == loadGeneration { isLoading = false } }
 
         do {
             let loaded = try await FediverseHotVideosResponse.fetchVideos(languageIds: fediverseLanguageIds)
+            guard generation == loadGeneration else { return }
             videos = loaded
             fediverseHotLoaded = true
             total = loaded.count
             currentStart = loaded.count
         } catch {
+            guard generation == loadGeneration else { return }
             Self.log.error("loadFediverseHot failed error=\(error.localizedDescription, privacy: .public)")
             errorMessage = error.localizedDescription
         }

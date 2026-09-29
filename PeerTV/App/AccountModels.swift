@@ -52,20 +52,4 @@ enum AccountPersistence {
             UserDefaults.standard.removeObject(forKey: activeAccountKey)
         }
     }
-
-    /// Downloads folder for the active account (or legacy layout if none). Safe from any thread (URLSession delegate).
-    static func resolvedDownloadsDirectoryURL() -> URL {
-        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        guard let s = UserDefaults.standard.string(forKey: activeAccountKey),
-              UUID(uuidString: s) != nil else {
-            let dir = caches.appendingPathComponent("Downloads", isDirectory: true)
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            return dir
-        }
-        let accountRoot = caches.appendingPathComponent("Accounts/\(s)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: accountRoot, withIntermediateDirectories: true)
-        let dir = accountRoot.appendingPathComponent("Downloads", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
 }

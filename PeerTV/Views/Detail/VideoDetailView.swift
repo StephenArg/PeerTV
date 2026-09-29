@@ -16,10 +16,19 @@ struct VideoDetailView: View {
 
     private let originHost: String?
     private let commentReadHost: String?
+    /// Set when opened from the History tab; shows a "Remove from History" action that runs this
+    /// and closes the screen.
+    private let onRemoveFromHistory: (() -> Void)?
 
-    init(videoId: String, originHost: String? = nil, commentReadHost: String? = nil) {
+    init(
+        videoId: String,
+        originHost: String? = nil,
+        commentReadHost: String? = nil,
+        onRemoveFromHistory: (() -> Void)? = nil
+    ) {
         self.originHost = originHost
         self.commentReadHost = commentReadHost
+        self.onRemoveFromHistory = onRemoveFromHistory
         _vm = StateObject(wrappedValue: VideoDetailViewModel(videoId: videoId, originHost: originHost))
     }
 
@@ -205,13 +214,22 @@ struct VideoDetailView: View {
                             }
 
                             if (DebugFlags.showAPIExplorer && DebugFlags.showVideoDetailRawJSON)
-                                || deletionGrant != nil {
+                                || deletionGrant != nil
+                                || onRemoveFromHistory != nil {
                                 Divider().padding(.vertical, 4)
 
                                 HStack(spacing: 24) {
                                     if DebugFlags.showAPIExplorer && DebugFlags.showVideoDetailRawJSON {
                                         Button("Show Raw JSON") {
                                             showDebugJSON = true
+                                        }
+                                        .font(.caption)
+                                    }
+
+                                    if let onRemoveFromHistory {
+                                        Button("Remove from History") {
+                                            onRemoveFromHistory()
+                                            dismiss()
                                         }
                                         .font(.caption)
                                     }

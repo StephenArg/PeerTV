@@ -16,6 +16,7 @@ struct SettingsView: View {
     // code and the Settings picker stay in sync across launches.
     @AppStorage(PlayerSettings.bufferCapKey) private var bufferCapRawValue: Int = BufferCap.gb1.rawValue
     @AppStorage(PlayerSettings.defaultResolutionKey) private var defaultResolutionRawValue: Int = DefaultResolution.auto.rawValue
+    @AppStorage(PlayerSettings.defaultPlaybackSpeedKey) private var defaultPlaybackSpeed: Double = 1.0
 
     var body: some View {
         ScrollView {
@@ -52,6 +53,12 @@ struct SettingsView: View {
                         }
                     }
                     Text("Default quality applies when a video opens. If the chosen resolution isn't offered, the next lower one plays (falling back to Auto if none exists). Auto uses HLS adaptive bitrate.\n")
+                    Picker("Default speed", selection: $defaultPlaybackSpeed) {
+                        ForEach(PlayerSettings.playbackSpeeds, id: \.self) { speed in
+                            Text(PlayerSettings.speedLabel(speed)).tag(Double(speed))
+                        }
+                    }
+                    Text("Every video starts at this speed, including the next one in a playlist. Changing speed in the player only affects the video you're watching.\n")
                     Picker("Buffer cap", selection: $bufferCapRawValue) {
                         ForEach(BufferCap.allCases) { cap in
                             Text(cap.displayName).tag(cap.rawValue)

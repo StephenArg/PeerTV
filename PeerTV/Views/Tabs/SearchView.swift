@@ -90,7 +90,7 @@ struct SearchView: View {
             isContentReady = false
         }
         .task {
-            vm.configure(instanceClient: session.apiClient)
+            vm.configure(instanceClient: session.apiClient, includeAllPrivacy: session.canSeeAllVideos)
             if session.isAnonymous {
                 vm.mode = .global
             }
