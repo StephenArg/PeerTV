@@ -26,9 +26,9 @@ struct PeerTVApp: App {
     init() {
         // Picture in Picture on tvOS requires a playback session so audio continues
         // after the full-screen player is dismissed into the corner window.
-        let audioSession = AVAudioSession.sharedInstance()
-        try? audioSession.setCategory(.playback, mode: .moviePlayback)
-        try? audioSession.setActive(true)
+        // Only the category is set here. Activating the session is what stops other apps' audio,
+        // so that waits until a video starts (`PlayerPresenter.presentPlayer`).
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
     }
 
     var body: some Scene {

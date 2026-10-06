@@ -553,7 +553,7 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         row.displayName = user.displayName ?? user.account?.displayName ?? user.account?.name
         if let list = user.account?.avatars,
            let best = list.max(by: { ($0.width ?? 0) < ($1.width ?? 0) }) {
-            row.avatarPath = best.path
+            row.avatarPath = best.resolvablePath
         }
         rows[idx] = row
         accounts = rows

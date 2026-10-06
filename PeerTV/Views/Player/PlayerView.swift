@@ -46,7 +46,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
 
         let asset = Self.makeAsset(url: url, accessToken: accessToken, instanceBaseURL: nil)
         let item = AVPlayerItem(asset: asset)
-        item.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
+        item.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds(bytesPerSecond: nil)
         let player = AVPlayer(playerItem: item)
         controller.player = player
         controller.delegate = context.coordinator
@@ -306,7 +306,7 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
                 instanceBaseURL: nil
             )
             let newItem = AVPlayerItem(asset: asset)
-            newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
+            newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds(bytesPerSecond: nil)
             player.replaceCurrentItem(with: newItem)
 
             let tolerance = CMTime(seconds: 5, preferredTimescale: 600)

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SubscriptionsView: View {
     @EnvironmentObject var session: SessionStore
+    @Environment(\.peerTVSubscriptionsTabRefreshToken) private var subscriptionsTabRefreshToken
     @StateObject private var vm = SubscriptionsViewModel()
     @State private var detailVideoId: String = ""
     @State private var showDetail = false
@@ -42,8 +43,8 @@ struct SubscriptionsView: View {
                                             VStack(spacing: 12) {
                                                 ChannelAvatarView(
                                                     url: session.thumbnailURL(
-                                                        path: sub.avatars?.last?.path
-                                                              ?? sub.ownerAccount?.avatars?.last?.path
+                                                        path: sub.avatars?.last?.resolvablePath
+                                                              ?? sub.ownerAccount?.avatars?.last?.resolvablePath
                                                     )
                                                 )
                                                 .frame(width: 80, height: 80)
@@ -139,6 +140,10 @@ struct SubscriptionsView: View {
             vm.configure(apiClient: session.apiClient)
             await vm.loadInitialIfEmpty()
         }
+        .onChange(of: subscriptionsTabRefreshToken) { _, _ in
+            vm.configure(apiClient: session.apiClient)
+            Task { await vm.refreshInPlace() }
+        }
     }
 
     private func restoreSubscriptionsGridFocus(using scrollProxy: ScrollViewProxy) {
@@ -151,5 +156,17 @@ struct SubscriptionsView: View {
                 scrollProxy.scrollTo(subscriptionsCellScrollId(videoId: id), anchor: .center)
             }
         }
+    }
+}
+
+private struct SubscriptionsTabRefreshTokenKey: EnvironmentKey {
+    static let defaultValue: Int = 0
+}
+
+extension EnvironmentValues {
+    /// Incremented in `MainTabView` when the Subscriptions tab is selected or the app returns to the foreground on it.
+    var peerTVSubscriptionsTabRefreshToken: Int {
+        get { self[SubscriptionsTabRefreshTokenKey.self] }
+        set { self[SubscriptionsTabRefreshTokenKey.self] = newValue }
     }
 }

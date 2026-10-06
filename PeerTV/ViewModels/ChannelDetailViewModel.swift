@@ -10,6 +10,8 @@ final class ChannelDetailViewModel: ObservableObject {
 
     @Published var isSubscribed = false
     @Published var isTogglingSubscription = false
+    /// Set when subscribing or unsubscribing fails; the view shows it in an alert.
+    @Published var subscriptionError: String?
 
     private let pageSize = 15
     private var videosStart = 0
@@ -124,6 +126,9 @@ final class ChannelDetailViewModel: ObservableObject {
             }
         } catch {
             isSubscribed = wasSubscribed
+            subscriptionError = wasSubscribed
+                ? "You couldn’t be unsubscribed from this channel. Try again later."
+                : "You couldn’t be subscribed to this channel. Try again later."
         }
     }
 }

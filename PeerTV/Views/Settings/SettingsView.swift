@@ -64,7 +64,7 @@ struct SettingsView: View {
                             Text(cap.displayName).tag(cap.rawValue)
                         }
                     }
-                    Text("Buffer cap is the approximate maximum AVPlayer will keep buffered ahead. Larger caps smooth over slow networks at the cost of memory.\n")
+                    Text("Buffer cap is roughly how much video is kept loaded ahead of where you are. The same cap covers less time at higher quality: far fewer minutes of 4K than of 720p. Larger caps smooth over slow networks at the cost of memory.\n")
 
                     Toggle("Resume playback", isOn: $resumePlaybackEnabled)
                     if resumePlaybackEnabled {
@@ -168,7 +168,7 @@ struct SettingsView: View {
                 }
 
                 settingsSection(title: "About") {
-                    LabeledContent("App Version", value: "1.0.0")
+                    LabeledContent("App Version", value: Self.appVersionText)
                     LabeledContent("Platform", value: "tvOS")
                 }
 
@@ -264,6 +264,14 @@ struct SettingsView: View {
             ThumbnailProgressBarSettings.isVisible = newValue
         }
     }
+
+    /// Marketing version and build number from the bundle, e.g. "1.16 (16)".
+    private static let appVersionText: String = {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "Unknown"
+        guard let build = info?["CFBundleVersion"] as? String, !build.isEmpty else { return version }
+        return "\(version) (\(build))"
+    }()
 
     private func refreshPlaybackSettings() {
         showVideoDetailRawJSON = DebugFlags.showVideoDetailRawJSON

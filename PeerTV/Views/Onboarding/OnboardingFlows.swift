@@ -378,6 +378,16 @@ struct LoginScreen<Host: AccountLoginHost>: View {
             return
         }
 
+        // Nothing to offer when this exact sign-in is already in the keychain.
+        let alreadySaved = InternetCredentialSaver.savedCredentials(forHost: hostSnapshot).contains {
+            $0.account == usernameSnapshot && $0.password == passwordSnapshot
+        }
+        if alreadySaved {
+            host.didLogin(tokens: tokens, username: usernameSnapshot)
+            vm.password = ""
+            return
+        }
+
         pendingLoginCompletion = PendingLoginCompletion(
             tokens: tokens,
             username: usernameSnapshot

@@ -68,6 +68,26 @@ struct PlaylistDetailView: View {
         return vm.elements.compactMap { $0.video?.stableId }
     }
 
+    /// Ordered ids for the playback queue. Covers the whole playlist once `allVideoIds` has loaded,
+    /// not only the pages scrolled into view, so autoplay and skip-next run to the end. With
+    /// shuffle on, the tiles on screen keep their order and the rest follow in random order.
+    private func playbackQueueVideoIds(startingAt videoId: String) -> [String] {
+        let loaded = orderedPlaylistVideoIds
+        guard let all = allVideoIds, all.count > loaded.count, all.contains(videoId) else { return loaded }
+        guard playlistShuffleEnabled, !isEditingPlaylist else { return all }
+        var notLoaded = all
+        for id in loaded {
+            if let index = notLoaded.firstIndex(of: id) { notLoaded.remove(at: index) }
+        }
+        return loaded + notLoaded.shuffled()
+    }
+
+    /// `allVideoIds` goes stale when a video is removed or moved; the playback queue and the
+    /// download buttons both read it.
+    private func refreshAllVideoIds() async {
+        allVideoIds = await vm.loadAllPlaylistVideoIds()
+    }
+
     /// `vm.elements` reordered by `shuffleOrder`. Any elements not yet in the
     /// shuffle order (e.g. freshly paginated) are appended in their loaded order.
     private var shuffledElements: [PlaylistElement] {
@@ -324,7 +344,7 @@ struct PlaylistDetailView: View {
                                     } else {
                                         Button {
                                             if didLongPress { didLongPress = false; return }
-                                            let ids = orderedPlaylistVideoIds
+                                            let ids = playbackQueueVideoIds(startingAt: video.stableId)
                                             if let idx = ids.firstIndex(of: video.stableId) {
                                                 let queue = PlaylistPlaybackQueue(
                                                     videoIds: ids,
@@ -455,6 +475,7 @@ struct PlaylistDetailView: View {
                     Task {
                         await vm.removePlaylistElement(e)
                         elementPendingRemoval = nil
+                        await refreshAllVideoIds()
                     }
                 }
             }
@@ -770,6 +791,7 @@ struct PlaylistDetailView: View {
 
     private func commitReposition() async {
         guard let r = reposition else { return }
+        let didMove = r.draft.firstIndex(where: { $0.id == r.movedElementId }) != r.originalIndex
         await vm.commitDraftReorder(
             movedElementId: r.movedElementId,
             originalStartPosition: r.originalStartPosition,
@@ -778,6 +800,7 @@ struct PlaylistDetailView: View {
         )
         if vm.errorMessage == nil {
             cancelReposition()
+            if didMove { await refreshAllVideoIds() }
         }
     }
 }

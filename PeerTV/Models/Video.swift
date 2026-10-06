@@ -79,8 +79,18 @@ struct Video: Decodable, Identifiable, Hashable {
         dislikes = try c.decodeIfPresent(Int.self, forKey: .dislikes)
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
         publishedAt = try c.decodeIfPresent(String.self, forKey: .publishedAt)
-        thumbnailPath = try c.decodeIfPresent(String.self, forKey: .thumbnailPath)
-        previewPath = try c.decodeIfPresent(String.self, forKey: .previewPath)
+        // PeerTube 8.1 deprecated `thumbnailPath` / `previewPath` (null once images are in object
+        // storage) in favor of a `thumbnails` array. The server fills the legacy pair with the
+        // smallest and largest 16:9 entries, so do the same when it leaves them out.
+        let thumbnails = try? c.decodeIfPresent([VideoThumbnail].self, forKey: .thumbnails)
+        let legacyThumbnailPath = try c.decodeIfPresent(String.self, forKey: .thumbnailPath)
+        let legacyPreviewPath = try c.decodeIfPresent(String.self, forKey: .previewPath)
+        thumbnailPath = legacyThumbnailPath?.isEmpty == false
+            ? legacyThumbnailPath
+            : thumbnails?.fileUrl(widest: false)
+        previewPath = legacyPreviewPath?.isEmpty == false
+            ? legacyPreviewPath
+            : thumbnails?.fileUrl(widest: true)
         embedPath = try c.decodeIfPresent(String.self, forKey: .embedPath)
         channel = try c.decodeIfPresent(VideoChannelSummary.self, forKey: .channel)
         account = try c.decodeIfPresent(AccountSummary.self, forKey: .account)
@@ -92,7 +102,7 @@ struct Video: Decodable, Identifiable, Hashable {
 
     private enum CodingKeys: String, CodingKey {
         case id, uuid, name, description, duration, views, likes, dislikes
-        case createdAt, publishedAt, thumbnailPath, previewPath, embedPath
+        case createdAt, publishedAt, thumbnailPath, previewPath, thumbnails, embedPath
         case channel, account, privacy, streamingPlaylists, files
     }
 
@@ -494,7 +504,12 @@ struct Video: Decodable, Identifiable, Hashable {
                       let label = file.resolution?.label,
                       let urlStr = file.playlistUrl ?? file.fileUrl,
                       let url = URL(string: urlStr) else { continue }
-                options.append(ResolutionOption(resolutionId: resId, label: label, url: url))
+                options.append(ResolutionOption(
+                    resolutionId: resId,
+                    label: label,
+                    url: url,
+                    bytesPerSecond: bytesPerSecond(of: file)
+                ))
             }
         }
 
@@ -504,11 +519,22 @@ struct Video: Decodable, Identifiable, Hashable {
                       let label = file.resolution?.label,
                       let urlStr = file.fileUrl,
                       let url = URL(string: urlStr) else { continue }
-                options.append(ResolutionOption(resolutionId: resId, label: label, url: url))
+                options.append(ResolutionOption(
+                    resolutionId: resId,
+                    label: label,
+                    url: url,
+                    bytesPerSecond: bytesPerSecond(of: file)
+                ))
             }
         }
 
         return options.sorted { ($0.resolutionId) > ($1.resolutionId) }
+    }
+
+    /// Average data rate of one rendition: its file size over the video's duration.
+    private func bytesPerSecond(of file: VideoFile) -> Double? {
+        guard let size = file.size, size > 0, let duration, duration > 0 else { return nil }
+        return Double(size) / Double(duration)
     }
 
     /// PeerTube HLS: resolution `0` is audio-only; it must not be used as a video quality option.
@@ -519,7 +545,21 @@ struct ResolutionOption: Identifiable {
     let resolutionId: Int
     let label: String
     let url: URL
+    /// Average data rate of this rendition; `nil` when the server reports no file size or the
+    /// video has no duration (live). Turns the Buffer cap setting from megabytes into seconds.
+    var bytesPerSecond: Double? = nil
     var id: Int { resolutionId }
+}
+
+extension Array where Element == ResolutionOption {
+    /// Data rate to size the forward buffer for. A fixed quality uses that rendition's rate;
+    /// Auto can climb to the best one, so it is sized for the highest.
+    func bufferBytesPerSecond(forQualityLabel label: String) -> Double? {
+        if let fixed = first(where: { $0.label == label }) {
+            return fixed.bytesPerSecond
+        }
+        return compactMap(\.bytesPerSecond).max()
+    }
 }
 
 extension ResolutionOption {
@@ -615,6 +655,42 @@ struct ActorImage: Decodable {
         self.fileUrl = fileUrl
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    /// Where to load the image from: the legacy instance-relative `path`, or the absolute
+    /// `fileUrl` on servers that no longer send one (deprecated in PeerTube 8.0, null once the
+    /// image is in object storage).
+    var resolvablePath: String? {
+        if let path, !path.isEmpty { return path }
+        if let fileUrl, !fileUrl.isEmpty { return fileUrl }
+        return nil
+    }
+}
+
+/// One entry of the `thumbnails` array on videos and playlists (PeerTube 8.1 and later). The
+/// fediverse hot API uses the same shape.
+struct VideoThumbnail: Decodable {
+    let width: Int?
+    let height: Int?
+    let fileUrl: String?
+}
+
+extension Array where Element == VideoThumbnail {
+    /// Absolute URL of the narrowest or widest landscape entry. Square entries (podcast artwork)
+    /// are used only when there is nothing else.
+    func fileUrl(widest: Bool) -> String? {
+        let usable = compactMap { thumbnail -> (width: Int, isLandscape: Bool, url: String)? in
+            let url = thumbnail.fileUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !url.isEmpty else { return nil }
+            let width = thumbnail.width ?? 0
+            return (width, width > (thumbnail.height ?? 0), url)
+        }
+        let landscape = usable.filter { $0.isLandscape }
+        let candidates = landscape.isEmpty ? usable : landscape
+        let pick = widest
+            ? candidates.max(by: { $0.width < $1.width })
+            : candidates.min(by: { $0.width < $1.width })
+        return pick?.url
     }
 }
 

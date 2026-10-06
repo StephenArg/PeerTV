@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChannelsListView: View {
     @EnvironmentObject var session: SessionStore
+    @Environment(\.peerTVChannelsTabRefreshToken) private var channelsTabRefreshToken
     @StateObject private var vm = ChannelsViewModel()
 
     private let columns = [
@@ -45,8 +46,24 @@ struct ChannelsListView: View {
         }
         .task {
             vm.configure(apiClient: session.apiClient)
-            await vm.loadInitial()
+            await vm.loadInitialIfEmpty()
         }
+        .onChange(of: channelsTabRefreshToken) { _, _ in
+            vm.configure(apiClient: session.apiClient)
+            Task { await vm.refreshInPlace() }
+        }
+    }
+}
+
+private struct ChannelsTabRefreshTokenKey: EnvironmentKey {
+    static let defaultValue: Int = 0
+}
+
+extension EnvironmentValues {
+    /// Incremented in `MainTabView` when the Channels tab is selected or the app returns to the foreground on it.
+    var peerTVChannelsTabRefreshToken: Int {
+        get { self[ChannelsTabRefreshTokenKey.self] }
+        set { self[ChannelsTabRefreshTokenKey.self] = newValue }
     }
 }
 
@@ -59,8 +76,8 @@ struct ChannelCardView: View {
         VStack(spacing: 12) {
             ChannelAvatarView(
                 url: session.thumbnailURL(
-                    path: channel.avatars?.last?.path
-                          ?? channel.ownerAccount?.avatars?.last?.path
+                    path: channel.avatars?.last?.resolvablePath
+                          ?? channel.ownerAccount?.avatars?.last?.resolvablePath
                 )
             )
             .frame(width: 120, height: 120)

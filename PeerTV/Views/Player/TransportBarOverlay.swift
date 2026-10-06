@@ -65,6 +65,10 @@ private enum TransportBarMetrics {
     static let throughputFallbackBitrate: Double = 8_000_000
     /// Minimum buffer-ahead before treating a user resume as safe to force immediately.
     static let adequateBufferAheadSeconds: TimeInterval = 2
+    /// Buffer-ahead at which a waiting player is started even though AVPlayer hasn't said it can
+    /// keep up. A large forward-buffer hint (see `BufferCap`) can keep AVPlayer waiting to fill
+    /// it; this bounds that wait.
+    static let stalledResumeBufferAheadSeconds: TimeInterval = 10
     /// Minimum gap between automatic stall-recovery attempts (avoids hammering AVPlayer).
     static let stallRecoveryCooldown: TimeInterval = 1.5
     /// Thin HUD strip shown on Play/Pause double-press.
@@ -1935,6 +1939,9 @@ final class TransportBarController: NSObject {
         }
         loadedRangesObservation = item.observe(\.loadedTimeRanges, options: [.initial, .new]) { [weak self] _, _ in
             self?.updateBuffered()
+            // A large forward-buffer hint can keep AVPlayer waiting to fill it, and the periodic
+            // observer is silent while playback waits, so check as data arrives.
+            self?.tryResumeIfStalled(minBufferAhead: TransportBarMetrics.stalledResumeBufferAheadSeconds)
         }
         keepUpObservation = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] _, _ in
             self?.tryResumeIfStalled()
@@ -2066,11 +2073,11 @@ final class TransportBarController: NSObject {
     }
 
     /// Unsticks playback when the user wants to play but AVPlayer is waiting despite loaded data.
-    private func tryResumeIfStalled() {
+    private func tryResumeIfStalled(minBufferAhead: TimeInterval = TransportBarMetrics.adequateBufferAheadSeconds) {
         guard userIntendsToPlay, !isStallRecoveryInFlight, let player else { return }
         guard player.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
         guard let item = player.currentItem else { return }
-        guard item.isPlaybackLikelyToKeepUp || hasAdequateBufferAhead() else { return }
+        guard item.isPlaybackLikelyToKeepUp || hasAdequateBufferAhead(minSeconds: minBufferAhead) else { return }
 
         let now = Date()
         if let last = lastStallRecoveryAt,

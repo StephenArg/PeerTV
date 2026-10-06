@@ -6,13 +6,24 @@ import UIKit
 struct VideoStoryboard: Decodable, Hashable {
     /// Relative path the instance serves the sprite-sheet image from, e.g.
     /// `/lazy-static/storyboards/<uuid>.jpg`. Must be resolved against the instance's base URL.
-    let storyboardPath: String
+    /// Deprecated in PeerTube 8.0 and null once the image is in object storage; use `sheetPath`.
+    let storyboardPath: String?
+    /// Absolute sprite-sheet URL (PeerTube 7.1 and later).
+    let fileUrl: String?
     let totalHeight: Int
     let totalWidth: Int
     let spriteHeight: Int
     let spriteWidth: Int
     /// Seconds of source video between consecutive sprites (usually 1…10).
     let spriteDuration: Int
+
+    /// Where to load the sprite sheet from: the legacy path when the server still sends it,
+    /// otherwise the absolute `fileUrl`.
+    var sheetPath: String? {
+        if let storyboardPath, !storyboardPath.isEmpty { return storyboardPath }
+        if let fileUrl, !fileUrl.isEmpty { return fileUrl }
+        return nil
+    }
 }
 
 struct VideoStoryboardsResponse: Decodable {
@@ -186,7 +197,8 @@ final class TileStoryboardLoader {
                 let metadata = try await client.rawRequest(.videoStoryboards(id: video.stableId))
                 let response = try decoder.decode(VideoStoryboardsResponse.self, from: metadata)
                 guard let storyboard = response.storyboards.first,
-                      let url = sheetURL(path: storyboard.storyboardPath, base: client.baseURL)
+                      let path = storyboard.sheetPath,
+                      let url = sheetURL(path: path, base: client.baseURL)
                 else {
                     sawDefinitiveEmpty = true
                     continue

@@ -6,7 +6,9 @@ struct VideoPlaylist: Decodable, Identifiable, Hashable {
     let displayName: String?
     let description: String?
     let privacy: PlaylistPrivacy?
+    /// Deprecated in PeerTube 8.1 and null once the image is in object storage; use `cardThumbnailPath`.
     let thumbnailPath: String?
+    let thumbnails: [VideoThumbnail]?
     let videosLength: Int?
     let createdAt: String?
     let updatedAt: String?
@@ -22,12 +24,19 @@ struct VideoPlaylist: Decodable, Identifiable, Hashable {
         return nil
     }
 
+    /// Card image: the legacy `thumbnailPath` when the server still sends it, otherwise the smallest
+    /// entry of `thumbnails`.
+    var cardThumbnailPath: String? {
+        if let thumbnailPath, !thumbnailPath.isEmpty { return thumbnailPath }
+        return thumbnails?.fileUrl(widest: false)
+    }
+
     /// Include fields that affect list tiles and navigation labels. Using only `id` made SwiftUI treat
     /// refetched playlists as unchanged, so `videosLength` and thumbnails never updated on screen.
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
         hasher.combine(videosLength)
-        hasher.combine(thumbnailPath)
+        hasher.combine(cardThumbnailPath)
         hasher.combine(displayName)
         hasher.combine(updatedAt)
         hasher.combine(privacy?.id)
@@ -36,7 +45,7 @@ struct VideoPlaylist: Decodable, Identifiable, Hashable {
     static func == (lhs: VideoPlaylist, rhs: VideoPlaylist) -> Bool {
         lhs.id == rhs.id
             && lhs.videosLength == rhs.videosLength
-            && lhs.thumbnailPath == rhs.thumbnailPath
+            && lhs.cardThumbnailPath == rhs.cardThumbnailPath
             && lhs.displayName == rhs.displayName
             && lhs.updatedAt == rhs.updatedAt
             && lhs.privacy?.id == rhs.privacy?.id

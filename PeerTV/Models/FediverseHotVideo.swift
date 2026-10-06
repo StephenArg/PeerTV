@@ -32,12 +32,6 @@ struct FediverseHotVideosResponse: Decodable {
     }
 }
 
-struct FediverseHotThumbnail: Decodable {
-    let width: Int?
-    let height: Int?
-    let fileUrl: String?
-}
-
 struct FediverseHotVideo: Decodable {
     let uuid: String?
     let name: String?
@@ -49,7 +43,7 @@ struct FediverseHotVideo: Decodable {
     let publicOrigin: String?
     let channelUrl: String?
     let thumbnailPath: String?
-    let thumbnails: [FediverseHotThumbnail]?
+    let thumbnails: [VideoThumbnail]?
 
     func toVideo() -> Video {
         let host = Self.host(from: mediaOrigin)

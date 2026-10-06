@@ -73,7 +73,7 @@ enum Endpoint {
     case subscribe(uri: String)
     case unsubscribe(handle: String)
 
-    // Watch history (auth required)
+    // Watch progress: counts the view and, when signed in, saves the time for history and resume
     case watchVideo(id: String, currentTime: Int)
 
     // Search
@@ -161,7 +161,8 @@ enum Endpoint {
         case .unsubscribe(let handle):
             return "/api/v1/users/me/subscriptions/\(handle)"
         case .watchVideo(let id, _):
-            return "/api/v1/videos/\(id)/watching"
+            // The documented route; `/watching` was the older name and is no longer in the API reference.
+            return "/api/v1/videos/\(id)/views"
         case .searchVideos:
             return "/api/v1/search/videos"
         case .randomVideos:
@@ -228,9 +229,9 @@ enum Endpoint {
     var method: String {
         switch self {
         case .usersToken, .addVideoToPlaylist, .subscribe, .reorderPlaylistVideos,
-             .videoFileToken, .postVideoComment, .clearHistory:
+             .videoFileToken, .postVideoComment, .clearHistory, .watchVideo:
             return "POST"
-        case .rateVideo, .watchVideo:
+        case .rateVideo:
             return "PUT"
         case .unsubscribe, .removePlaylistElement, .deletePlaylist, .deleteVideo, .removeHistoryVideo:
             return "DELETE"
@@ -273,7 +274,7 @@ enum Endpoint {
              .deleteVideo,
              .videosExistInPlaylists,
              .subscriptionExist, .subscribe, .unsubscribe,
-             .watchVideo, .videoFileToken, .postVideoComment:
+             .videoFileToken, .postVideoComment:
             return true
         default:
             return false

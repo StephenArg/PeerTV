@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HistoryView: View {
     @EnvironmentObject var session: SessionStore
+    @Environment(\.peerTVHistoryTabRefreshToken) private var historyTabRefreshToken
     @StateObject private var vm = HistoryViewModel()
     @StateObject private var anonymousVM = AnonymousHistoryViewModel()
     @State private var detailVideoId: String = ""
@@ -193,6 +194,12 @@ struct HistoryView: View {
                 Task { await vm.loadInitial() }
             }
         }
+        .onChange(of: historyTabRefreshToken) { _, _ in
+            // Anonymous history is local and already live.
+            guard !session.isAnonymous else { return }
+            vm.configure(apiClient: session.apiClient)
+            Task { await vm.refreshInPlace() }
+        }
     }
 
     /// `nil` hides the action: signed-in removal needs the numeric id the history API takes.
@@ -275,5 +282,17 @@ struct HistoryView: View {
             accessToken: session.tokenStore.accessToken,
             accountId: session.playbackAccountId
         )
+    }
+}
+
+private struct HistoryTabRefreshTokenKey: EnvironmentKey {
+    static let defaultValue: Int = 0
+}
+
+extension EnvironmentValues {
+    /// Incremented in `MainTabView` when the History tab is selected or the app returns to the foreground on it.
+    var peerTVHistoryTabRefreshToken: Int {
+        get { self[HistoryTabRefreshTokenKey.self] }
+        set { self[HistoryTabRefreshTokenKey.self] = newValue }
     }
 }

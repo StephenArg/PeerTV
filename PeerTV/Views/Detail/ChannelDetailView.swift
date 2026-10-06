@@ -35,8 +35,8 @@ struct ChannelDetailView: View {
                         HStack(spacing: 24) {
                             ChannelAvatarView(
                                 url: session.thumbnailURL(
-                                    path: channel.avatars?.last?.path
-                                          ?? channel.ownerAccount?.avatars?.last?.path
+                                    path: channel.avatars?.last?.resolvablePath
+                                          ?? channel.ownerAccount?.avatars?.last?.resolvablePath
                                 )
                             )
                             .frame(width: 120, height: 120)
@@ -160,6 +160,17 @@ struct ChannelDetailView: View {
         }
         .navigationDestination(isPresented: $showDetail) {
             VideoDetailView(videoId: detailVideoId)
+        }
+        .alert(
+            "Couldn’t update subscription",
+            isPresented: Binding(
+                get: { vm.subscriptionError != nil },
+                set: { if !$0 { vm.subscriptionError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(vm.subscriptionError ?? "")
         }
         .task {
             vm.configure(

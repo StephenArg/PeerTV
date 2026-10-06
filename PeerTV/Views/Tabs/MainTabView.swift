@@ -2,17 +2,29 @@ import SwiftUI
 
 struct MainTabView: View {
     @EnvironmentObject var session: SessionStore
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var playlistEditCoordinator = PlaylistEditCoordinator()
     private let shuffleEnabled: Bool
 
     @State private var selectedTab: MainTabSelection = .home
     /// Bumped whenever the Playlists tab is selected so the list refetches (TabView often skips `onAppear` on return).
     @State private var playlistsTabRefreshToken = 0
+    /// Bumped when History, Subscriptions or Channels should refresh in place: the tab was selected, or the
+    /// app came back to the foreground on it. tvOS suspends the app instead of quitting it, so without
+    /// this those lists would only load once.
+    @State private var historyTabRefreshToken = 0
+    @State private var subscriptionsTabRefreshToken = 0
+    @State private var channelsTabRefreshToken = 0
+    @State private var inPlaceRefreshTask: Task<Void, Never>?
+    @State private var wasBackgrounded = false
     /// Last time the user left the Shuffle tab; used to refetch only after a long absence (see `ShuffleView`).
     @State private var shuffleTabLeftAt: Date?
     @State private var shuffleStaleRefreshToken = 0
 
     private static let shuffleTabStaleAwaySeconds: TimeInterval = 60
+    /// How long a tab must stay selected before it refreshes. Moving along the tab bar selects every
+    /// tab on the way, and those shouldn't each fire a request.
+    private static let inPlaceRefreshSettleNanoseconds: UInt64 = 400_000_000
 
     init() {
         self.shuffleEnabled = DebugFlags.shuffleTabEnabled
@@ -63,6 +75,9 @@ struct MainTabView: View {
         }
         .environmentObject(playlistEditCoordinator)
         .environment(\.peerTVPlaylistsTabRefreshToken, playlistsTabRefreshToken)
+        .environment(\.peerTVHistoryTabRefreshToken, historyTabRefreshToken)
+        .environment(\.peerTVSubscriptionsTabRefreshToken, subscriptionsTabRefreshToken)
+        .environment(\.peerTVChannelsTabRefreshToken, channelsTabRefreshToken)
         .environment(\.peerTVShuffleTabStaleRefreshToken, shuffleStaleRefreshToken)
         .overlay {
             TabBarControllerFocusLock(locked: playlistEditCoordinator.isRepositioning)
@@ -86,6 +101,41 @@ struct MainTabView: View {
                     shuffleStaleRefreshToken += 1
                 }
             }
+            scheduleInPlaceRefresh(for: newTab)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background:
+                wasBackgrounded = true
+            case .active where wasBackgrounded:
+                // tvOS resumes a suspended process instead of relaunching, so nothing else reloads these lists.
+                wasBackgrounded = false
+                bumpInPlaceRefreshToken(for: selectedTab)
+            default:
+                break
+            }
+        }
+    }
+
+    private func scheduleInPlaceRefresh(for tab: MainTabSelection) {
+        inPlaceRefreshTask?.cancel()
+        inPlaceRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.inPlaceRefreshSettleNanoseconds)
+            guard !Task.isCancelled, selectedTab == tab else { return }
+            bumpInPlaceRefreshToken(for: tab)
+        }
+    }
+
+    private func bumpInPlaceRefreshToken(for tab: MainTabSelection) {
+        switch tab {
+        case .history:
+            historyTabRefreshToken += 1
+        case .subscriptions:
+            subscriptionsTabRefreshToken += 1
+        case .channels:
+            channelsTabRefreshToken += 1
+        case .home, .shuffle, .playlists, .settings:
+            break
         }
     }
 }

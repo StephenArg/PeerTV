@@ -10,6 +10,8 @@ struct VideoComment: Decodable, Hashable, Identifiable {
     let account: AccountSummary?
     let isDeleted: Bool?
     let heldForReview: Bool?
+    /// Reply count on thread roots from the list endpoint; `nil` on replies.
+    let totalReplies: Int?
 
     var id: String {
         if let commentId { return "c-\(commentId)" }
@@ -54,6 +56,7 @@ struct VideoComment: Decodable, Hashable, Identifiable {
         case account
         case isDeleted
         case heldForReview
+        case totalReplies
     }
 }
 

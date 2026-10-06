@@ -8,6 +8,8 @@ final class VideoDetailViewModel: ObservableObject {
     @Published var rawJSON: String?
 
     @Published var userRating: String = "none"
+    /// Set when a like or dislike couldn't be saved; the view shows it in an alert.
+    @Published var ratingError: String?
 
     @Published var isDeleting = false
     @Published var deleteError: String?
@@ -203,6 +205,10 @@ final class VideoDetailViewModel: ObservableObject {
             userRating = oldRating
             video?.likes = oldLikes
             video?.dislikes = oldDislikes
+            // Videos opened from another server are rated through that server, where this account isn't signed in.
+            ratingError = usesFederatedOrigin
+                ? "This video is on another server, so it can’t be rated from here."
+                : "Your rating couldn’t be saved. Try again later."
         }
     }
 
@@ -238,6 +244,9 @@ final class VideoDetailViewModel: ObservableObject {
 
     // MARK: - Comments
 
+    /// Thread-reply requests allowed in flight at once when loading comments.
+    private static let maxConcurrentThreadFetches = 6
+
     private var mergedComments: [VideoComment] {
         var byId: [Int: VideoComment] = [:]
         for c in comments {
@@ -267,17 +276,23 @@ final class VideoDetailViewModel: ObservableObject {
             comments = response.data ?? []
             threadReplySupplements = []
 
-            let roots = comments.filter { $0.isDeleted != true && $0.isRoot }
+            // Only threads with replies need the per-thread fetch, a few at a time. A root without
+            // a reply count is fetched anyway, in case the server doesn't send one.
+            let threadIds = comments
+                .filter { $0.isDeleted != true && $0.isRoot && ($0.totalReplies ?? 1) > 0 }
+                .compactMap(\.commentId)
             let extras = await withTaskGroup(of: [VideoComment].self) { group -> [VideoComment] in
-                for root in roots {
-                    guard let tid = root.commentId else { continue }
-                    group.addTask {
-                        await self.fetchThreadReplyExtras(threadId: tid)
-                    }
+                var pending = threadIds.makeIterator()
+                for _ in 0..<Self.maxConcurrentThreadFetches {
+                    guard let tid = pending.next() else { break }
+                    group.addTask { await self.fetchThreadReplyExtras(threadId: tid) }
                 }
                 var merged: [VideoComment] = []
                 for await batch in group {
                     merged.append(contentsOf: batch)
+                    if let tid = pending.next() {
+                        group.addTask { await self.fetchThreadReplyExtras(threadId: tid) }
+                    }
                 }
                 return merged
             }

@@ -381,6 +381,9 @@ final class PlayerPresenter {
 
         let presenter = Self.topViewController(from: root)
 
+        // Activated here rather than at launch, so opening the app doesn't stop other apps' audio.
+        try? AVAudioSession.sharedInstance().setActive(true)
+
         let rawSaved: TimeInterval? = {
             guard let accountId else { return nil }
             return PlaybackPositionStore.position(for: videoId, accountId: accountId)
@@ -411,7 +414,9 @@ final class PlayerPresenter {
             )
             PlaybackLog.log.notice("pre-seeking to \(pos, privacy: .public)s before attach videoId=\(videoId, privacy: .public)")
         } else {
-            item.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
+            item.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds(
+                bytesPerSecond: resolutions.bufferBytesPerSecond(forQualityLabel: initialLabel)
+            )
         }
 
         let player = AVPlayer(playerItem: item)
@@ -630,11 +635,19 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     private var nextItemPrefetch: PlaylistItemPrefetch?
     private var pendingResumeAt: TimeInterval?
     private var hasStartedInitialPlayback = false
+    /// True while the initial seek to the saved resume point is in flight; `currentTime` can't be
+    /// trusted until it lands.
+    private var isSeekingToResumePoint = false
+    private var resignActiveObserver: Any?
+    private var lastPeriodicPositionSaveAt = Date.distantPast
 
     private static let watchReportInterval: Double = 30
     /// Prefetch the next playlist item once this little playback time remains. Kept short
     /// because the prefetched stream URL can carry a video file token that expires.
     private static let playlistPrefetchLeadTime: TimeInterval = 120
+    /// Minimum gap between position saves from the progress observer, which also fires on every
+    /// seek and play/pause. Each save rewrites the whole positions dictionary.
+    private static let periodicPositionSaveMinInterval: TimeInterval = 5
 
     init(resolutions: [ResolutionOption], autoURL: URL, initialLabel: String, accessToken: String?,
          player: AVPlayer, controller: AVPlayerViewController,
@@ -675,6 +688,14 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         reportCurrentTime()
         startProgressReporting()
         observeInitialItemIfNeeded(player: player)
+        // tvOS can end a suspended app without telling it, so don't wait for the player to close.
+        resignActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.appWillResignActive()
+        }
 
         transportBar = TransportBarController(
             showsQualityButton: !resolutions.isEmpty,
@@ -855,7 +876,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             let resp = try decoder.decode(VideoStoryboardsResponse.self, from: data)
             guard let storyboard = resp.storyboards.first,
-                  let sheetURL = await storyboardImageURL(path: storyboard.storyboardPath, apiClient: apiClient)
+                  let path = storyboard.sheetPath,
+                  let sheetURL = await storyboardImageURL(path: path, apiClient: apiClient)
             else { return }
 
             let (imageData, _) = try await URLSession.shared.data(from: sheetURL)
@@ -986,6 +1008,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     deinit {
         initialLoadObservation?.invalidate()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        if let resignActiveObserver { NotificationCenter.default.removeObserver(resignActiveObserver) }
         if let progressTimeObserver, let player { player.removeTimeObserver(progressTimeObserver) }
     }
 
@@ -1027,6 +1050,14 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
                 }
             }
         }
+    }
+
+    /// Forward-buffer hint for the quality now selected: the Buffer cap setting converted from
+    /// megabytes to seconds at that rendition's data rate.
+    private var preferredBufferSeconds: Double {
+        PlayerSettings.bufferCap.preferredBufferSeconds(
+            bytesPerSecond: resolutions.bufferBytesPerSecond(forQualityLabel: currentLabel)
+        )
     }
 
     /// Resumes playback at the given rate, using `playImmediately` when buffer is already ready.
@@ -1090,8 +1121,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
 
         if let resumeAt = pendingResumeAt {
             pendingResumeAt = nil
-            player.currentItem?.preferredForwardBufferDuration =
-                PlayerSettings.bufferCap.effectivePreferredBufferSeconds
+            player.currentItem?.preferredForwardBufferDuration = preferredBufferSeconds
 
             let current = CMTimeGetSeconds(player.currentTime())
             let alreadyAtTarget = current.isFinite && abs(current - resumeAt) <= 2.0
@@ -1101,6 +1131,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
                 resumePlayer(player, at: currentSpeed)
             } else {
                 let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+                isSeekingToResumePoint = true
                 player.seek(
                     to: CMTime(seconds: resumeAt, preferredTimescale: 600),
                     toleranceBefore: tolerance,
@@ -1108,6 +1139,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
                 ) { [weak self] _ in
                     guard let self, let player = self.player else { return }
                     DispatchQueue.main.async {
+                        self.isSeekingToResumePoint = false
                         self.resumePlayer(player, at: self.currentSpeed)
                     }
                 }
@@ -1283,7 +1315,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             transportBar?.preferredPlaybackRate = currentSpeed
 
             let newItem = AVPlayerItem(asset: prepared.asset)
-            newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
+            newItem.preferredForwardBufferDuration = preferredBufferSeconds
             HLSPlaybackPreferences.applyPreferredMaximumResolution(pick.preferredMaximumResolution, to: newItem)
 
             if let obs = progressTimeObserver, let p = self.player {
@@ -1419,8 +1451,15 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         progressTimeObserver = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) {
             [weak self] _ in
             self?.reportCurrentTime()
+            self?.savePlaybackPositionMidPlayback(throttled: true)
             self?.prefetchNextPlaylistItemIfNeeded()
         }
+    }
+
+    private func appWillResignActive() {
+        guard !didCallDismiss else { return }
+        reportCurrentTime()
+        savePlaybackPositionMidPlayback(throttled: false)
     }
 
     private func reportCurrentTime() {
@@ -1449,6 +1488,22 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             videoId: videoId,
             accountId: accountId
         )
+    }
+
+    /// Saves the resume point while the video is still open, so a crash or tvOS ending the
+    /// suspended app doesn't lose it. Skipped until the player has settled on its real position:
+    /// during the initial resume seek or a quality/playlist swap `currentTime` reads near zero,
+    /// and saving that would erase the stored point.
+    private func savePlaybackPositionMidPlayback(throttled: Bool) {
+        guard hasStartedInitialPlayback, !isSeekingToResumePoint, !isSwitching, !didCallDismiss else { return }
+        if throttled {
+            let now = Date()
+            guard now.timeIntervalSince(lastPeriodicPositionSaveAt) >= Self.periodicPositionSaveMinInterval else {
+                return
+            }
+            lastPeriodicPositionSaveAt = now
+        }
+        savePlaybackPosition()
     }
 
     private func clearPlaybackPosition() {
@@ -1908,7 +1963,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         if isHLSToMasterAuto {
             HLSPlaybackPreferences.applyPreferredMaximumResolution(nil, to: newItem)
         }
-        newItem.preferredForwardBufferDuration = PlayerSettings.bufferCap.effectivePreferredBufferSeconds
+        newItem.preferredForwardBufferDuration = preferredBufferSeconds
 
         if let oldObs = endObserver {
             NotificationCenter.default.removeObserver(oldObs)

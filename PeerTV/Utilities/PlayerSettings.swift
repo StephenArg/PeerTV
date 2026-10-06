@@ -3,9 +3,10 @@ import Foundation
 /// User-selectable playback buffer caps.
 ///
 /// AVPlayer exposes only a *time-based* buffer hint (`AVPlayerItem.preferredForwardBufferDuration`),
-/// not a byte-based one, so we map each MB / GB preset to an equivalent number of seconds assuming
-/// roughly 8 Mbps (≈ 1 MB/s). This is intentionally approximate — at lower bitrates the buffer will
-/// cover more wall-clock time, at higher bitrates less. AVPlayer still adapts around this hint.
+/// not a byte-based one, so each MB / GB preset is converted to seconds at the data rate of what is
+/// playing: the same cap holds fewer seconds of a 4K stream than of a 720p one. The rate comes from
+/// the file size PeerTube reports for the rendition (see `ResolutionOption.bytesPerSecond`). AVPlayer
+/// still treats the result as a hint and adapts around it.
 enum BufferCap: Int, CaseIterable, Identifiable {
     case mb100 = 100
     case mb500 = 500
@@ -16,10 +17,18 @@ enum BufferCap: Int, CaseIterable, Identifiable {
     case gb10 = 10240
     case gb15 = 15360
 
-    /// AVFoundation treats `preferredForwardBufferDuration` as seconds of media to buffer
-    /// before resuming after a stall. Values in the thousands make the player wait
-    /// indefinitely even when some data is already loaded.
-    static let maxPreferredBufferSeconds: Double = 180
+    /// Data rate assumed when the stream's real one isn't known: roughly 8 Mbps (≈ 1 MB/s).
+    static let fallbackBytesPerSecond: Double = 1_000_000
+
+    /// Smallest hint passed to AVPlayer, so a small cap on a very high bitrate stream still
+    /// leaves it a workable buffer.
+    static let minPreferredBufferSeconds: Double = 15
+
+    /// Largest hint passed to AVPlayer, whatever the cap works out to. Left to itself, AVFoundation
+    /// waits to fill a large buffer before resuming after a stall; the transport bar's stall
+    /// recovery (`TransportBarController.tryResumeIfStalled`) is what starts playback as soon as
+    /// a little data is loaded. If playback ever sits in "buffering" with data loaded, lower this.
+    static let maxPreferredBufferSeconds: Double = 4 * 60 * 60
 
     var id: Int { rawValue }
 
@@ -36,12 +45,14 @@ enum BufferCap: Int, CaseIterable, Identifiable {
         }
     }
 
-    /// Forward-buffer hint in seconds (MB value × 1 s at the 8 Mbps reference bitrate).
-    var preferredBufferSeconds: Double { Double(rawValue) }
+    /// Bytes this cap allows ahead of the playhead (raw values are megabytes).
+    var bytes: Double { Double(rawValue) * 1_048_576 }
 
-    /// Value actually passed to AVPlayer — clamped so stalls remain recoverable.
-    var effectivePreferredBufferSeconds: Double {
-        min(preferredBufferSeconds, Self.maxPreferredBufferSeconds)
+    /// Forward-buffer hint in seconds for a stream of the given data rate: how long this cap's
+    /// bytes last at that rate. Pass `nil` when the rate isn't known.
+    func preferredBufferSeconds(bytesPerSecond: Double?) -> Double {
+        let rate = bytesPerSecond.flatMap { $0 > 0 ? $0 : nil } ?? Self.fallbackBytesPerSecond
+        return min(max(bytes / rate, Self.minPreferredBufferSeconds), Self.maxPreferredBufferSeconds)
     }
 }
 

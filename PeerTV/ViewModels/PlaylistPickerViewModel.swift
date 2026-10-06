@@ -7,6 +7,8 @@ final class PlaylistPickerViewModel: ObservableObject {
 
     @Published var myPlaylists: [VideoPlaylist] = []
     @Published var myPlaylistsLoaded = false
+    /// True when the last load failed, so the picker can say so instead of "no playlists yet".
+    @Published var myPlaylistsLoadFailed = false
     @Published var playlistElementByPlaylistId: [Int: Int] = [:]
     @Published var playlistMessage: String?
 
@@ -25,6 +27,7 @@ final class PlaylistPickerViewModel: ObservableObject {
 
     func loadMyPlaylists() async {
         myPlaylistsLoaded = false
+        myPlaylistsLoadFailed = false
         defer { myPlaylistsLoaded = true }
         guard let apiClient, let name = accountName, !name.isEmpty else {
             myPlaylists = []
@@ -40,6 +43,7 @@ final class PlaylistPickerViewModel: ObservableObject {
         } catch {
             myPlaylists = []
             playlistElementByPlaylistId = [:]
+            myPlaylistsLoadFailed = true
         }
     }
 

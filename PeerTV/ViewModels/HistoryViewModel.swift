@@ -10,6 +10,10 @@ final class HistoryViewModel: ObservableObject {
     private var currentStart = 0
     private var total: Int?
     private var apiClient: PeerTubeAPIClient?
+    /// Set while `refreshInPlace` runs. Kept off `isLoading` so the spinner and the empty state don't flash.
+    private var isRefreshing = false
+    /// A page requested while a refresh was replacing the list; loaded once the refresh lands.
+    private var loadMoreDeferred = false
 
     func configure(apiClient: PeerTubeAPIClient) {
         self.apiClient = apiClient
@@ -32,7 +36,42 @@ final class HistoryViewModel: ObservableObject {
         await loadInitial()
     }
 
+    /// Refetches the rows already loaded without clearing the list first, so scroll position and
+    /// focus survive and a video watched since the last load shows up. On failure the rows on
+    /// screen are kept.
+    func refreshInPlace() async {
+        guard let apiClient, !isLoading, !isRefreshing else { return }
+        isRefreshing = true
+        // Refetch as many rows as are already loaded so a deep scroll position still exists.
+        let count = min(max(pageSize, videos.count), 100)
+        do {
+            let response: PaginatedResponse<Video> = try await apiClient.request(
+                .myHistory(start: 0, count: count)
+            )
+            var seen = Set<String>()
+            let fresh = response.items.filter { seen.insert($0.stableId).inserted }
+            // A request returns at most 100 rows; rows loaded beyond that stay, after the fresh ones.
+            videos = videos.count > count
+                ? fresh + videos.filter { !seen.contains($0.stableId) }
+                : fresh
+            total = response.total
+            currentStart = max(response.items.count, videos.count)
+            errorMessage = nil
+        } catch {
+            // Keep the rows on screen; the next refresh tries again.
+        }
+        isRefreshing = false
+        if loadMoreDeferred {
+            loadMoreDeferred = false
+            await loadMore()
+        }
+    }
+
     func loadMore() async {
+        if isRefreshing {
+            loadMoreDeferred = true
+            return
+        }
         guard let apiClient, !isLoading, canLoadMore else { return }
         isLoading = true
         errorMessage = nil

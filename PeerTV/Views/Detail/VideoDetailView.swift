@@ -294,6 +294,17 @@ struct VideoDetailView: View {
         } message: {
             Text(vm.deleteError ?? "Unknown error.")
         }
+        .alert(
+            "Couldn’t rate video",
+            isPresented: Binding(
+                get: { vm.ratingError != nil },
+                set: { if !$0 { vm.ratingError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(vm.ratingError ?? "")
+        }
         .task {
             let client = detailAPIClient
             let federated = vm.usesFederatedOrigin
@@ -558,7 +569,31 @@ struct PlaylistPickerView: View {
                 } else {
                     ScrollView {
                         VStack(spacing: 12) {
-                            if vm.myPlaylists.isEmpty {
+                            if vm.myPlaylistsLoadFailed {
+                                Text("Your playlists couldn’t be loaded.")
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 30)
+                                    .padding(.bottom, 8)
+
+                                Button {
+                                    Task { await vm.loadMyPlaylists() }
+                                } label: {
+                                    HStack(spacing: 16) {
+                                        Image(systemName: "arrow.clockwise")
+                                            .font(.title3)
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 48)
+                                        Text("Try again")
+                                            .font(.body)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 30)
+                                    .padding(.vertical, 18)
+                                }
+                                .buttonStyle(.card)
+                            } else if vm.myPlaylists.isEmpty {
                                 Text("You do not have any playlists yet.")
                                     .font(.body)
                                     .foregroundStyle(.secondary)

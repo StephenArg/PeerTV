@@ -130,7 +130,7 @@ struct PlaylistCardView: View {
                 Color.gray.opacity(0.15)
                     .aspectRatio(16 / 9, contentMode: .fit)
                     .overlay {
-                        CachedAsyncImage(url: session.thumbnailURL(path: playlist.thumbnailPath))
+                        CachedAsyncImage(url: session.thumbnailURL(path: playlist.cardThumbnailPath))
                             .scaleEffect(isFocused ? CardFocusStyle.parallaxImageScale : 1.0)
                             .animation(CardFocusStyle.animation, value: isFocused)
                     }

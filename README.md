@@ -110,7 +110,7 @@ Use **Close** in the toolbar to return to Home.
 | `GET /api/v1/users/me/subscriptions/exist` | Check subscription status |
 | `POST /api/v1/users/me/subscriptions` | Subscribe to a channel |
 | `DELETE /api/v1/users/me/subscriptions/{handle}` | Unsubscribe from a channel |
-| `PUT /api/v1/videos/{id}/watching` | Report watch progress (history) |
+| `POST /api/v1/videos/{id}/views` | Report watch progress (view count and history) |
 | `GET /api/v1/search/videos` | Search videos on the connected instance (with privacy filters) |
 | `GET https://sepiasearch.org/api/v1/search/videos` | Sepia Search — public federation search (`sort=-match`) |
 | `GET /plugins/random-video-tab/router/videos/random` | Random videos (plugin) |
