@@ -4,7 +4,9 @@ struct MainTabView: View {
     @EnvironmentObject var session: SessionStore
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var playlistEditCoordinator = PlaylistEditCoordinator()
-    private let shuffleEnabled: Bool
+    /// Live, so toggling the Shuffle tab in Settings adds or removes it without relaunching.
+    @AppStorage(DebugFlags.shuffleTabKey) private var shuffleEnabled = false
+    @AppStorage(TabBarStyle.storageKey) private var tabBarStyle: TabBarStyle = .sidebar
 
     @State private var selectedTab: MainTabSelection = .home
     /// Bumped whenever the Playlists tab is selected so the list refetches (TabView often skips `onAppear` on return).
@@ -26,10 +28,6 @@ struct MainTabView: View {
     /// tab on the way, and those shouldn't each fire a request.
     private static let inPlaceRefreshSettleNanoseconds: UInt64 = 400_000_000
 
-    init() {
-        self.shuffleEnabled = DebugFlags.shuffleTabEnabled
-    }
-
     private var isAnonymous: Bool { session.isAnonymous }
 
     var body: some View {
@@ -42,23 +40,19 @@ struct MainTabView: View {
                 PlaylistsTab()
                     .tabItem { Label("Playlists", systemImage: "list.and.film") }
                     .tag(MainTabSelection.playlists)
+
+                if shuffleEnabled {
+                    ShuffleTab()
+                        .tabItem { Label("Shuffle", systemImage: "shuffle") }
+                        .tag(MainTabSelection.shuffle)
+                }
             }
 
             HistoryTab()
                 .tabItem { Label("History", systemImage: "clock") }
                 .tag(MainTabSelection.history)
 
-            SettingsTab()
-                .tabItem { Label("Settings", systemImage: "gear") }
-                .tag(MainTabSelection.settings)
-
             if !isAnonymous {
-                if shuffleEnabled {
-                    ShuffleTab()
-                        .tabItem { Label("Shuffle", systemImage: "shuffle") }
-                        .tag(MainTabSelection.shuffle)
-                }
-
                 SubscriptionsTab()
                     .tabItem { Label("Subscriptions", systemImage: "bell") }
                     .tag(MainTabSelection.subscriptions)
@@ -67,9 +61,19 @@ struct MainTabView: View {
                     .tabItem { Label("Channels", systemImage: "person.2") }
                     .tag(MainTabSelection.channels)
             }
+
+            SettingsTab()
+                .tabItem { Label("Settings", systemImage: "gear") }
+                .tag(MainTabSelection.settings)
         }
+        .modifier(TabBarStyleModifier(style: tabBarStyle))
         .onChange(of: session.isAnonymous) { _, anonymous in
             if anonymous, selectedTab != .home, selectedTab != .history, selectedTab != .settings {
+                selectedTab = .home
+            }
+        }
+        .onChange(of: shuffleEnabled) { _, enabled in
+            if !enabled, selectedTab == .shuffle {
                 selectedTab = .home
             }
         }
@@ -136,6 +140,40 @@ struct MainTabView: View {
             channelsTabRefreshToken += 1
         case .home, .shuffle, .playlists, .settings:
             break
+        }
+    }
+}
+
+/// How the main tabs are presented (Settings → Navigation). Persisted via `@AppStorage`.
+enum TabBarStyle: String, CaseIterable, Identifiable {
+    case sidebar
+    case topBar
+
+    static let storageKey = "PeerTV.tabBarStyle"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .sidebar: "Sidebar"
+        case .topBar: "Top bar"
+        }
+    }
+}
+
+/// The sidebar needs tvOS 18; tvOS 17 always shows the top tab bar.
+private struct TabBarStyleModifier: ViewModifier {
+    let style: TabBarStyle
+
+    func body(content: Content) -> some View {
+        if style == .sidebar {
+            if #available(tvOS 18.0, *) {
+                content.tabViewStyle(.sidebarAdaptable)
+            } else {
+                content
+            }
+        } else {
+            content
         }
     }
 }

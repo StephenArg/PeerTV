@@ -8,11 +8,6 @@ final class ChannelDetailViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
 
-    @Published var isSubscribed = false
-    @Published var isTogglingSubscription = false
-    /// Set when subscribing or unsubscribing fails; the view shows it in an alert.
-    @Published var subscriptionError: String?
-
     private let pageSize = 15
     private var videosStart = 0
     private var videosTotal: Int?
@@ -95,11 +90,30 @@ final class ChannelDetailViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
     }
+}
 
-    // MARK: - Subscription
+// MARK: - Subscription
 
-    func checkSubscription() async {
-        guard let apiClient, isAuthenticated else { return }
+/// Whether the signed-in user follows one channel, and the subscribe / unsubscribe toggle.
+/// Shared by the channel page and the video page.
+@MainActor
+final class ChannelSubscriptionViewModel: ObservableObject {
+    @Published private(set) var isSubscribed = false
+    @Published private(set) var isToggling = false
+    /// Set when subscribing or unsubscribing fails; views show it in an alert.
+    @Published var error: String?
+
+    private var apiClient: PeerTubeAPIClient?
+    /// Channel handle (`name@host`), the form the subscription endpoints take.
+    private var handle: String?
+
+    func configure(apiClient: PeerTubeAPIClient, handle: String?) {
+        self.apiClient = apiClient
+        self.handle = handle
+    }
+
+    func check() async {
+        guard let apiClient, let handle else { return }
         do {
             let data = try await apiClient.rawRequest(.subscriptionExist(uri: handle))
             if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Bool] {
@@ -110,10 +124,10 @@ final class ChannelDetailViewModel: ObservableObject {
         }
     }
 
-    func toggleSubscription() async {
-        guard let apiClient, !isTogglingSubscription else { return }
-        isTogglingSubscription = true
-        defer { isTogglingSubscription = false }
+    func toggle() async {
+        guard let apiClient, let handle, !isToggling else { return }
+        isToggling = true
+        defer { isToggling = false }
 
         let wasSubscribed = isSubscribed
         isSubscribed.toggle()
@@ -126,7 +140,7 @@ final class ChannelDetailViewModel: ObservableObject {
             }
         } catch {
             isSubscribed = wasSubscribed
-            subscriptionError = wasSubscribed
+            self.error = wasSubscribed
                 ? "You couldn’t be unsubscribed from this channel. Try again later."
                 : "You couldn’t be subscribed to this channel. Try again later."
         }

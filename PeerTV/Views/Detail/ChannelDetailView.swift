@@ -3,9 +3,9 @@ import SwiftUI
 struct ChannelDetailView: View {
     @EnvironmentObject var session: SessionStore
     @StateObject private var vm: ChannelDetailViewModel
+    @StateObject private var subscription = ChannelSubscriptionViewModel()
     @State private var detailVideoId: String = ""
     @State private var showDetail = false
-    @State private var didLongPress = false
     /// False while another screen covers this one (e.g. UIKit player) so we can defer focus restore to `onAppear`.
     @State private var isChannelGridOnScreen = false
     @State private var pendingFocusVideoId: String?
@@ -59,21 +59,7 @@ struct ChannelDetailView: View {
                             }
 
                             if session.phase == .authenticated && !vm.isOwnChannel {
-                                Button {
-                                    Task { await vm.toggleSubscription() }
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        Image(systemName: vm.isSubscribed ? "checkmark.circle.fill" : "plus.circle")
-                                        Text(vm.isSubscribed ? "Subscribed" : "Subscribe")
-                                    }
-                                    .font(.callout)
-                                    .fontWeight(.semibold)
-                                    .padding(.horizontal, 24)
-                                    .padding(.vertical, 14)
-                                }
-                                .buttonStyle(.card)
-                                .disabled(vm.isTogglingSubscription)
-                                .opacity(vm.isTogglingSubscription ? 0.6 : 1.0)
+                                ChannelSubscribeButton(subscription: subscription)
                             }
                         }
                         .padding(.horizontal, 50)
@@ -107,7 +93,7 @@ struct ChannelDetailView: View {
                             LazyVGrid(columns: columns, spacing: 50) {
                                 ForEach(vm.videos, id: \.stableId) { video in
                                     Button {
-                                        if didLongPress { didLongPress = false; return }
+                                        if showDetail { return }
                                         PlayerPresenter.shared.play(
                                             videoId: video.stableId,
                                             apiClient: session.apiClient,
@@ -124,7 +110,7 @@ struct ChannelDetailView: View {
                                     .simultaneousGesture(
                                         LongPressGesture(minimumDuration: 0.5)
                                             .onEnded { _ in
-                                                didLongPress = true
+                                                // The release after a long press can still reach the tile button; `showDetail` makes it a no-op.
                                                 detailVideoId = video.stableId
                                                 showDetail = true
                                             }
@@ -161,17 +147,7 @@ struct ChannelDetailView: View {
         .navigationDestination(isPresented: $showDetail) {
             VideoDetailView(videoId: detailVideoId)
         }
-        .alert(
-            "Couldn’t update subscription",
-            isPresented: Binding(
-                get: { vm.subscriptionError != nil },
-                set: { if !$0 { vm.subscriptionError = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(vm.subscriptionError ?? "")
-        }
+        .channelSubscriptionErrorAlert(subscription)
         .task {
             vm.configure(
                 apiClient: session.apiClient,
@@ -180,7 +156,10 @@ struct ChannelDetailView: View {
                 currentUsername: session.username.isEmpty ? nil : session.username
             )
             await vm.loadInitialIfEmpty()
-            await vm.checkSubscription()
+            if session.phase == .authenticated {
+                subscription.configure(apiClient: session.apiClient, handle: vm.handle)
+                await subscription.check()
+            }
         }
     }
 
@@ -193,6 +172,48 @@ struct ChannelDetailView: View {
             withAnimation(.easeOut(duration: 0.25)) {
                 scrollProxy.scrollTo(channelCellScrollId(videoId: id), anchor: .center)
             }
+        }
+    }
+}
+
+// MARK: - Subscribe control (channel page and video page)
+
+/// Subscribe / Subscribed toggle for one channel.
+struct ChannelSubscribeButton: View {
+    @ObservedObject var subscription: ChannelSubscriptionViewModel
+
+    var body: some View {
+        Button {
+            Task { await subscription.toggle() }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: subscription.isSubscribed ? "checkmark.circle.fill" : "plus.circle")
+                Text(subscription.isSubscribed ? "Subscribed" : "Subscribe")
+            }
+            .font(.callout)
+            .fontWeight(.semibold)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
+        }
+        .buttonStyle(.card)
+        .disabled(subscription.isToggling)
+        .opacity(subscription.isToggling ? 0.6 : 1.0)
+    }
+}
+
+extension View {
+    /// Alert for a failed subscribe or unsubscribe.
+    func channelSubscriptionErrorAlert(_ subscription: ChannelSubscriptionViewModel) -> some View {
+        alert(
+            "Couldn’t update subscription",
+            isPresented: Binding(
+                get: { subscription.error != nil },
+                set: { if !$0 { subscription.error = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(subscription.error ?? "")
         }
     }
 }

@@ -58,7 +58,7 @@ Username/password login via OAuth 2.0 password grant. Tokens are stored in Keych
 
 ### 3. Browse
 - **Home** — Trending videos with infinite scroll, search button at top
-- **Shuffle** — (Optional and requires special peertube plugin) Random videos from the `random-video-tab` plugin (toggleable in Developer settings, requires app restart)
+- **Shuffle** — (Optional and requires special peertube plugin) Random videos from the `random-video-tab` plugin (toggleable in Developer settings)
 - **Subscriptions** — Your subscription feed + channel icons that link to channel detail (requires auth)
 - **History** — Watch history, automatically tracked via the PeerTube API (requires auth)
 - **Playlists** — All playlists including private ones like "Watch Later" (requires auth)

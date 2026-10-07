@@ -8,7 +8,6 @@ struct DownloadedVideosView: View {
     @State private var showRemoveAllConfirmation = false
     @State private var detailVideoId: String = ""
     @State private var showDetail = false
-    @State private var didLongPress = false
 
     var body: some View {
         ScrollView {
@@ -101,7 +100,7 @@ struct DownloadedVideosView: View {
     @ViewBuilder
     private func downloadRow(_ video: DownloadedVideo) -> some View {
         Button {
-            if didLongPress { didLongPress = false; return }
+            if showDetail { return }
             if editMode {
                 downloadManager.removeDownload(videoId: video.videoId)
             } else {
@@ -186,7 +185,7 @@ struct DownloadedVideosView: View {
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.5)
                 .onEnded { _ in
-                    didLongPress = true
+                    // The release after a long press can still reach the tile button; `showDetail` makes it a no-op.
                     detailVideoId = video.videoId
                     showDetail = true
                 }

@@ -3,7 +3,8 @@ import Foundation
 enum DebugFlags {
     static let showAPIExplorer = true
 
-    private static let shuffleTabKey = "debug_shuffle_tab_enabled"
+    /// Also read live by `MainTabView` through `@AppStorage`, so the tab appears or disappears at once.
+    static let shuffleTabKey = "debug_shuffle_tab_enabled"
     private static let videoDetailRawJSONKey = "PeerTV.debugVideoDetailRawJSON"
 
     static var shuffleTabEnabled: Bool {

@@ -11,7 +11,6 @@ struct HistoryView: View {
     @State private var detailOriginHost: String?
     @State private var detailCommentReadHost: String?
     @State private var showDetail = false
-    @State private var didLongPress = false
     @State private var showClearConfirm = false
     @State private var historyActionError: String?
     /// False when another tab is selected so we do not scroll/focus this grid when the player dismisses from elsewhere.
@@ -70,7 +69,7 @@ struct HistoryView: View {
                     LazyVGrid(columns: columns, spacing: 50) {
                         ForEach(displayVideos, id: \.stableId) { video in
                             Button {
-                                if didLongPress { didLongPress = false; return }
+                                if showDetail { return }
                                 playVideo(video)
                             } label: {
                                 VideoCardView(
@@ -91,7 +90,7 @@ struct HistoryView: View {
                             .simultaneousGesture(
                                 LongPressGesture(minimumDuration: 0.5)
                                     .onEnded { _ in
-                                        didLongPress = true
+                                        // The release after a long press can still reach the tile button; `showDetail` makes it a no-op.
                                         detailVideoId = video.stableId
                                         detailVideo = video
                                         if session.isAnonymous {

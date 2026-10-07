@@ -14,10 +14,13 @@ struct VideoGridView: View {
     @State private var showScopeDialog = false
     @State private var showFediverseLanguagePicker = false
     @State private var showCategoryPicker = false
-    @State private var didLongPress = false
     /// False when another tab is selected so we do not scroll/focus the home grid when the player dismisses from elsewhere.
     @State private var isHomeGridOnScreen = false
     @FocusState private var homeGridFocusVideoId: String?
+    @FocusState private var isSearchButtonFocused: Bool
+    /// The Search button is the declared default focus so the app starts with the sidebar
+    /// collapsed; this backstop sets it once per launch in case the tab view placed focus first.
+    @State private var didPlaceInitialFocus = false
 
     private let columns = [
         GridItem(.adaptive(minimum: 380, maximum: 480), spacing: 30)
@@ -57,6 +60,7 @@ struct VideoGridView: View {
                                 .padding(.vertical, 12)
                             }
                             .buttonStyle(.card)
+                            .focused($isSearchButtonFocused)
 
                             if !session.isAnonymous, vm.showsSortControls {
                                 Button {
@@ -133,7 +137,7 @@ struct VideoGridView: View {
                     LazyVGrid(columns: columns, spacing: 50) {
                         ForEach(vm.videos, id: \.stableId) { video in
                             Button {
-                                if didLongPress { didLongPress = false; return }
+                                if showDetail { return }
                                 let tileThumb = VideoTileImageURL.thumbnail(
                                     for: video,
                                     session: session,
@@ -179,7 +183,7 @@ struct VideoGridView: View {
                             .simultaneousGesture(
                                 LongPressGesture(minimumDuration: 0.5)
                                     .onEnded { _ in
-                                        didLongPress = true
+                                        // The release after a long press can still reach the tile button; `showDetail` makes it a no-op.
                                         detailVideoId = video.stableId
                                         detailOriginHost = isFediverseTrending ? video.originHost : nil
                                         detailCommentReadHost = isFediverseTrending ? video.commentReadHost : nil
@@ -274,7 +278,11 @@ struct VideoGridView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
-        .onAppear { isHomeGridOnScreen = true }
+        .defaultFocus($isSearchButtonFocused, true)
+        .onAppear {
+            isHomeGridOnScreen = true
+            placeInitialFocusIfNeeded()
+        }
         .onDisappear { isHomeGridOnScreen = false }
         .task {
             vm.configure(
@@ -313,6 +321,18 @@ struct VideoGridView: View {
             default:
                 break
             }
+        }
+    }
+}
+
+private extension VideoGridView {
+    /// Runs on the first appearance only; later appearances (back from a video, another tab)
+    /// keep the focus restore the grid already does.
+    func placeInitialFocusIfNeeded() {
+        guard !didPlaceInitialFocus else { return }
+        didPlaceInitialFocus = true
+        DispatchQueue.main.async {
+            isSearchButtonFocused = true
         }
     }
 }

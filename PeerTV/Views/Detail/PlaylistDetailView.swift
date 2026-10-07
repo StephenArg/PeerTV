@@ -7,7 +7,6 @@ struct PlaylistDetailView: View {
     @StateObject private var vm: PlaylistDetailViewModel
     @State private var detailVideoId: String = ""
     @State private var showDetail = false
-    @State private var didLongPress = false
     @State private var isEditingPlaylist = false
     @State private var elementPendingRemoval: PlaylistElement?
     @State private var actionMenuElement: PlaylistElement?
@@ -343,7 +342,7 @@ struct PlaylistDetailView: View {
                                         .buttonStyle(.card)
                                     } else {
                                         Button {
-                                            if didLongPress { didLongPress = false; return }
+                                            if showDetail { return }
                                             let ids = playbackQueueVideoIds(startingAt: video.stableId)
                                             if let idx = ids.firstIndex(of: video.stableId) {
                                                 let queue = PlaylistPlaybackQueue(
@@ -377,7 +376,7 @@ struct PlaylistDetailView: View {
                                         .simultaneousGesture(
                                             LongPressGesture(minimumDuration: 0.5)
                                                 .onEnded { _ in
-                                                    didLongPress = true
+                                                    // The release after a long press can still reach the tile button; `showDetail` makes it a no-op.
                                                     detailVideoId = video.stableId
                                                     showDetail = true
                                                 }

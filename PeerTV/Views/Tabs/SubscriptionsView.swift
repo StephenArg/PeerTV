@@ -6,7 +6,6 @@ struct SubscriptionsView: View {
     @StateObject private var vm = SubscriptionsViewModel()
     @State private var detailVideoId: String = ""
     @State private var showDetail = false
-    @State private var didLongPress = false
     /// False while another screen covers this grid (e.g. UIKit player) so we can defer focus restore to `onAppear`.
     @State private var isSubscriptionsGridOnScreen = false
     @State private var pendingFocusVideoId: String?
@@ -69,7 +68,7 @@ struct SubscriptionsView: View {
                     LazyVGrid(columns: columns, spacing: 50) {
                         ForEach(vm.feedVideos, id: \.stableId) { video in
                             Button {
-                                if didLongPress { didLongPress = false; return }
+                                if showDetail { return }
                                 PlayerPresenter.shared.play(
                                     videoId: video.stableId,
                                     apiClient: session.apiClient,
@@ -86,7 +85,7 @@ struct SubscriptionsView: View {
                             .simultaneousGesture(
                                 LongPressGesture(minimumDuration: 0.5)
                                     .onEnded { _ in
-                                        didLongPress = true
+                                        // The release after a long press can still reach the tile button; `showDetail` makes it a no-op.
                                         detailVideoId = video.stableId
                                         showDetail = true
                                     }

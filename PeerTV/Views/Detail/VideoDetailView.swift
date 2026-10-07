@@ -5,6 +5,8 @@ struct VideoDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm: VideoDetailViewModel
     @StateObject private var playlistPickerVM = PlaylistPickerViewModel()
+    @StateObject private var subscription = ChannelSubscriptionViewModel()
+    @State private var showChannel = false
     @State private var showDebugJSON = false
     @State private var showPlaylistPicker = false
     @State private var descriptionExpanded = false
@@ -148,24 +150,7 @@ struct VideoDetailView: View {
                                     .bold()
                                     .multilineTextAlignment(.leading)
 
-                                HStack(spacing: 14) {
-                                    ChannelAvatarView(
-                                        url: detailAvatarURL(for: video)
-                                    )
-                                    .frame(width: 52, height: 52)
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(video.channel?.displayName ?? video.account?.displayName ?? "")
-                                            .font(.callout)
-                                            .fontWeight(.medium)
-
-                                        if let host = video.channel?.host ?? video.account?.host {
-                                            Text(host)
-                                                .font(.caption)
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                    }
-                                }
+                                channelRow(video: video)
                             }
 
                             HStack(spacing: 24) {
@@ -273,6 +258,12 @@ struct VideoDetailView: View {
                 .frame(width: geo.size.width, height: geo.size.height)
             }
         }
+        .navigationDestination(isPresented: $showChannel) {
+            if let handle = vm.video.flatMap(VideoDetailViewModel.channelHandle(for:)) {
+                ChannelDetailView(handle: handle)
+            }
+        }
+        .channelSubscriptionErrorAlert(subscription)
         .sheet(isPresented: $showDebugJSON) {
             DebugRawJSONView(title: vm.video?.name ?? "Video", json: vm.rawJSON ?? "No data")
         }
@@ -330,6 +321,13 @@ struct VideoDetailView: View {
             await vm.load()
             if let video = vm.video {
                 deletionGrant = await session.resolveVideoDeletionGrant(for: video)
+                if showsSubscribeButton(for: video) {
+                    subscription.configure(
+                        apiClient: session.apiClient,
+                        handle: VideoDetailViewModel.channelHandle(for: video)
+                    )
+                    await subscription.check()
+                }
             } else {
                 deletionGrant = nil
             }
@@ -350,6 +348,78 @@ struct VideoDetailView: View {
         }
         .anonymousRestrictionAlert(isPresented: $showAnonymousRestriction) {
             session.exitAnonymousToLogin()
+        }
+    }
+
+    // MARK: - Channel row
+
+    /// The channel page loads from the connected instance, so videos opened from another server
+    /// (fediverse trending, Sepia Search, anonymous browsing) keep a plain label.
+    private var canOpenChannel: Bool {
+        !vm.usesFederatedOrigin
+            && !session.isAnonymous
+            && vm.video.flatMap(VideoDetailViewModel.channelHandle(for:)) != nil
+    }
+
+    private func showsSubscribeButton(for video: Video) -> Bool {
+        session.phase == .authenticated && canOpenChannel && !isOwnChannel(video)
+    }
+
+    /// The signed-in user owns the video's channel (same account name on the home instance).
+    private func isOwnChannel(_ video: Video) -> Bool {
+        guard !session.username.isEmpty,
+              let owner = video.account?.name,
+              owner.caseInsensitiveCompare(session.username) == .orderedSame else { return false }
+        guard let ownerHost = video.account?.host?.lowercased(),
+              let homeHost = session.baseURL?.host?.lowercased() else { return true }
+        return ownerHost == homeHost
+    }
+
+    @ViewBuilder
+    private func channelRow(video: Video) -> some View {
+        HStack(spacing: 16) {
+            if canOpenChannel {
+                Button {
+                    showChannel = true
+                } label: {
+                    channelIdentity(video: video, showsChevron: true)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.card)
+                .accessibilityHint("Opens the channel")
+            } else {
+                channelIdentity(video: video, showsChevron: false)
+            }
+
+            if showsSubscribeButton(for: video) {
+                ChannelSubscribeButton(subscription: subscription)
+            }
+        }
+    }
+
+    private func channelIdentity(video: Video, showsChevron: Bool) -> some View {
+        HStack(spacing: 14) {
+            ChannelAvatarView(url: detailAvatarURL(for: video))
+                .frame(width: 52, height: 52)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(video.channel?.displayName ?? video.account?.displayName ?? "")
+                    .font(.callout)
+                    .fontWeight(.medium)
+
+                if let host = video.channel?.host ?? video.account?.host {
+                    Text(host)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 

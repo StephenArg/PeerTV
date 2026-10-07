@@ -8,7 +8,6 @@ struct SearchView: View {
     @State private var detailVideoId: String = ""
     @State private var detailOriginHost: String?
     @State private var showDetail = false
-    @State private var didLongPress = false
     /// Defer building `.searchable` until the full-screen cover has painted (avoids a flash of system search chrome).
     @State private var isContentReady = false
     @FocusState private var searchGridFocusVideoId: String?
@@ -127,7 +126,7 @@ struct SearchView: View {
                 LazyVGrid(columns: columns, spacing: 50) {
                     ForEach(vm.results, id: \.stableId) { video in
                         Button {
-                            if didLongPress { didLongPress = false; return }
+                            if showDetail { return }
                             let ctx = vm.playbackContext(
                                 for: video,
                                 accessToken: session.tokenStore.accessToken
@@ -165,7 +164,7 @@ struct SearchView: View {
                         .simultaneousGesture(
                             LongPressGesture(minimumDuration: 0.5)
                                 .onEnded { _ in
-                                    didLongPress = true
+                                    // The release after a long press can still reach the tile button; `showDetail` makes it a no-op.
                                     detailVideoId = video.stableId
                                     detailOriginHost = vm.mode == .global ? video.originHost : nil
                                     showDetail = true

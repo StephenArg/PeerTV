@@ -6,7 +6,6 @@ struct ShuffleView: View {
     @StateObject private var vm = ShuffleViewModel()
     @State private var detailVideoId: String = ""
     @State private var showDetail = false
-    @State private var didLongPress = false
 
     private let columns = [
         GridItem(.adaptive(minimum: 380, maximum: 480), spacing: 30)
@@ -39,7 +38,7 @@ struct ShuffleView: View {
                 LazyVGrid(columns: columns, spacing: 50) {
                     ForEach(vm.videos, id: \.stableId) { video in
                         Button {
-                            if didLongPress { didLongPress = false; return }
+                            if showDetail { return }
                             PlayerPresenter.shared.play(
                                 videoId: video.stableId,
                                 apiClient: session.apiClient,
@@ -54,7 +53,7 @@ struct ShuffleView: View {
                         .simultaneousGesture(
                             LongPressGesture(minimumDuration: 0.5)
                                 .onEnded { _ in
-                                    didLongPress = true
+                                    // The release after a long press can still reach the tile button; `showDetail` makes it a no-op.
                                     detailVideoId = video.stableId
                                     showDetail = true
                                 }

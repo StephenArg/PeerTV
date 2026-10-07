@@ -157,7 +157,9 @@ final class VideoDetailViewModel: ObservableObject {
         }
     }
 
-    private static func channelHandle(for video: Video) -> String? {
+    /// `name@host` of the video's channel (just `name` when the host is unknown), the form the
+    /// channel and subscription endpoints take.
+    static func channelHandle(for video: Video) -> String? {
         guard let name = video.channel?.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
             return nil
         }

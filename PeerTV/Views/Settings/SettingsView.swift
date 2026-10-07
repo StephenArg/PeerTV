@@ -5,7 +5,6 @@ struct SettingsView: View {
     @EnvironmentObject var appThemeStore: AppThemeStore
     @State private var shuffleEnabled = DebugFlags.shuffleTabEnabled
     @State private var showVideoDetailRawJSON = DebugFlags.showVideoDetailRawJSON
-    @State private var showShuffleRestartAlert = false
     @State private var accountPendingSignOut: UUID?
     @State private var showClearPositionsAlert = false
     @State private var savedPositionCount = PlaybackPositionStore.savedPositionCount
@@ -17,6 +16,7 @@ struct SettingsView: View {
     @AppStorage(PlayerSettings.bufferCapKey) private var bufferCapRawValue: Int = BufferCap.gb1.rawValue
     @AppStorage(PlayerSettings.defaultResolutionKey) private var defaultResolutionRawValue: Int = DefaultResolution.auto.rawValue
     @AppStorage(PlayerSettings.defaultPlaybackSpeedKey) private var defaultPlaybackSpeed: Double = 1.0
+    @AppStorage(TabBarStyle.storageKey) private var tabBarStyle: TabBarStyle = .sidebar
 
     var body: some View {
         ScrollView {
@@ -88,6 +88,16 @@ struct SettingsView: View {
                     Text("Partially watched videos show a thin progress bar at the bottom of their thumbnail.")
                 }
 
+                settingsSection(title: "Navigation") {
+                    Picker("Tab bar", selection: $tabBarStyle) {
+                        ForEach(TabBarStyle.allCases) { style in
+                            Text(style.displayName).tag(style)
+                        }
+                    }
+                } footer: {
+                    Text("The sidebar needs tvOS 18 or later; earlier versions always show the top bar.")
+                }
+
                 settingsSection(title: "Accounts") {
                     if session.isAnonymous {
                         anonymousAccountsSection
@@ -135,7 +145,6 @@ struct SettingsView: View {
                         Toggle("Shuffle Tab", isOn: $shuffleEnabled)
                             .onChange(of: shuffleEnabled) { _, newValue in
                                 DebugFlags.shuffleTabEnabled = newValue
-                                showShuffleRestartAlert = true
                             }
 
                         Toggle("Show Raw JSON on video details", isOn: $showVideoDetailRawJSON)
@@ -143,7 +152,7 @@ struct SettingsView: View {
                                 DebugFlags.showVideoDetailRawJSON = newValue
                             }
                     } footer: {
-                        Text("Changing Shuffle Tab prompts you to quit and reopen the app so the tab bar updates.")
+                        Text("Shuffle needs the random-video-tab plugin on your server.")
                     }
                 }
 
@@ -232,14 +241,6 @@ struct SettingsView: View {
             }
         } message: {
             Text("You will stay signed in on your other accounts.")
-        }
-        .alert("Apply shuffle tab change", isPresented: $showShuffleRestartAlert) {
-            Button("Quit now") {
-                exit(0)
-            }
-            Button("Later", role: .cancel) {}
-        } message: {
-            Text("PeerTV must quit and be opened again for the Shuffle tab to appear or disappear.")
         }
         .alert("Clear all saved positions?", isPresented: $showClearPositionsAlert) {
             Button("Clear All", role: .destructive) {
