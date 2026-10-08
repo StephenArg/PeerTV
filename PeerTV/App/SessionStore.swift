@@ -24,6 +24,16 @@ final class SessionStore: ObservableObject, AccountLoginHost {
 
     var isAnonymous: Bool { phase == .anonymous }
 
+    /// Browsing the selected server's public content, signed in or not. False while browsing
+    /// anonymously with no server chosen, when only fediverse trending and Sepia Search apply.
+    var canBrowseInstance: Bool {
+        switch phase {
+        case .authenticated: return true
+        case .anonymous: return baseURL != nil
+        case .needsInstance, .needsLogin: return false
+        }
+    }
+
     /// Account bucket for `PlaybackPositionStore` (anonymous session or active signed-in account).
     var playbackAccountId: UUID? {
         switch phase {
@@ -60,7 +70,8 @@ final class SessionStore: ObservableObject, AccountLoginHost {
 
     /// Stable identity for `MainTabView` so switching accounts recreates the tab hierarchy.
     var mainTabViewIdentity: String {
-        if phase == .anonymous { return "anonymous" }
+        // Includes the server so switching it while anonymous rebuilds the tabs with the new client.
+        if phase == .anonymous { return "anonymous-\(baseURL?.absoluteString ?? "none")" }
         return activeAccountId?.uuidString ?? "authenticated"
     }
 
@@ -294,7 +305,8 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         }
     }
 
-    /// Browse without signing in (fediverse home + Sepia search only).
+    /// Browse without signing in. With a server selected, its public videos; without one,
+    /// fediverse trending and Sepia Search only.
     func enterAnonymousMode() {
         username = ""
         userRole = nil
@@ -307,8 +319,20 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         Self.log.notice("enterAnonymousMode")
     }
 
-    /// Leave anonymous browsing and return to the login screen.
-    func exitAnonymousToLogin() {
+    /// Changes the server an anonymous session browses, staying anonymous. The URL has already
+    /// been validated by the server-selection flow.
+    func switchAnonymousServer(to url: URL) {
+        guard phase == .anonymous else { return }
+        baseURL = url
+        UserDefaults.standard.set(url.absoluteString, forKey: Self.instanceKey)
+        rebuildNetworking(usingAccountId: TokenStore.preLoginAccountId)
+        apiClient.baseURL = url
+        Self.log.notice("switchAnonymousServer host=\(url.host ?? url.absoluteString, privacy: .public)")
+    }
+
+    /// Ends anonymous browsing: back to sign-in when a server is selected, otherwise to server
+    /// selection (the sign-in form needs a server).
+    func leaveAnonymousMode() {
         guard phase == .anonymous else { return }
         AnonymousHistoryStore.shared.deactivate(clearEntries: true)
         PlaybackPositionStore.clearAnonymousPositions()
@@ -317,9 +341,9 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         tokenStore.clear()
         rebuildNetworking(usingAccountId: TokenStore.preLoginAccountId)
         apiClient.baseURL = baseURL
-        phase = .needsLogin
+        phase = baseURL == nil ? .needsInstance : .needsLogin
         syncDownloadManagerAccountContext()
-        Self.log.notice("exitAnonymousToLogin")
+        Self.log.notice("leaveAnonymousMode hasInstance=\(self.baseURL != nil)")
     }
 
     private func leaveAnonymousIfNeeded(clearHistory: Bool = true) {
@@ -342,15 +366,27 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         leaveAnonymousIfNeeded()
         guard let baseURL else { return }
 
-        if let active = activeAccountId,
-           let idx = accounts.firstIndex(where: { $0.id == active }) {
-            TokenStore(accountId: active).save(accessToken: tokens.accessToken, refreshToken: tokens.refreshToken)
+        // Signing in again on the active account's server updates that account. After "Change
+        // Instance" the server may differ: then a saved account for that server and name is
+        // reused, and otherwise the sign-in becomes a new account (below).
+        let serverKey = Self.normalizedInstanceKey(for: baseURL)
+        let existingIndex = accounts.firstIndex {
+            $0.id == activeAccountId && Self.normalizedInstanceKey(for: $0.baseURL) == serverKey
+        } ?? accounts.firstIndex {
+            Self.normalizedInstanceKey(for: $0.baseURL) == serverKey
+                && Self.normalizedUsername($0.username) == Self.normalizedUsername(username)
+        }
+        if let idx = existingIndex {
+            let id = accounts[idx].id
+            TokenStore(accountId: id).save(accessToken: tokens.accessToken, refreshToken: tokens.refreshToken)
             var rows = accounts
             rows[idx].username = username
             rows[idx].lastUsedAt = Date()
             accounts = rows
             persistAccounts()
-            rebuildNetworking(usingAccountId: active)
+            activeAccountId = id
+            AccountPersistence.saveActiveAccountId(id)
+            rebuildNetworking(usingAccountId: id)
             apiClient.baseURL = baseURL
             self.username = username
             userRole = nil
@@ -402,8 +438,9 @@ final class SessionStore: ObservableObject, AccountLoginHost {
         invalidateSession()
     }
 
+    /// Back to server selection. Saved accounts are kept; `didLogin` decides whether the next
+    /// sign-in updates the active account or adds one.
     func clearInstance() {
-        guard accounts.isEmpty else { return }
         TokenStore.deleteAllTokens(for: TokenStore.preLoginAccountId)
         baseURL = nil
         username = ""

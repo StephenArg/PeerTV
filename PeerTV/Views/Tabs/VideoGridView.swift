@@ -62,7 +62,7 @@ struct VideoGridView: View {
                             .buttonStyle(.card)
                             .focused($isSearchButtonFocused)
 
-                            if !session.isAnonymous, vm.showsSortControls {
+                            if session.canBrowseInstance, vm.showsSortControls {
                                 Button {
                                     showSortDialog = true
                                 } label: {
@@ -78,7 +78,7 @@ struct VideoGridView: View {
                                 .buttonStyle(.card)
                             }
 
-                            if !session.isAnonymous {
+                            if session.canBrowseInstance {
                                 Button {
                                     showScopeDialog = true
                                 } label: {
@@ -95,7 +95,7 @@ struct VideoGridView: View {
                                 .buttonStyle(.card)
                             }
 
-                            if !session.isAnonymous, vm.showsCategoryControls {
+                            if session.canBrowseInstance, vm.showsCategoryControls {
                                 Button {
                                     showCategoryPicker = true
                                 } label: {
@@ -290,15 +290,16 @@ struct VideoGridView: View {
                 isAuthenticated: session.phase == .authenticated,
                 includeAllPrivacy: session.canSeeAllVideos
             )
-            if session.isAnonymous {
-                await vm.loadAnonymousFediverseHome()
-            } else {
+            if session.canBrowseInstance {
                 await vm.refreshCategoryMenuItems()
                 await vm.loadInitialIfEmpty()
+            } else {
+                // Anonymous with no server: fediverse trending is all there is.
+                await vm.loadAnonymousFediverseHome()
             }
         }
         .onChange(of: session.isAnonymous) { _, anonymous in
-            guard anonymous else { return }
+            guard anonymous, !session.canBrowseInstance else { return }
             Task { await vm.loadAnonymousFediverseHome() }
         }
         .onChange(of: session.canSeeAllVideos) { _, _ in

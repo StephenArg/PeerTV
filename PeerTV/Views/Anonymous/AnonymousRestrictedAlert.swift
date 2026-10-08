@@ -12,7 +12,7 @@ extension View {
     ) -> some View {
         alert(AnonymousRestrictionCopy.title, isPresented: isPresented) {
             Button("Close", role: .cancel) {}
-            Button("Go to Login") {
+            Button("Sign In") {
                 onGoToLogin()
             }
         } message: {

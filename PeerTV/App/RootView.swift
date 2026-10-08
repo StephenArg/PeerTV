@@ -10,7 +10,12 @@ struct RootView: View {
             case .needsInstance:
                 InstanceSetupView()
             case .needsLogin:
-                LoginView()
+                // The sign-in form needs a server; without one, choose it first.
+                if session.baseURL == nil {
+                    InstanceSetupView()
+                } else {
+                    LoginView()
+                }
             case .anonymous, .authenticated:
                 MainTabView()
                     .id(session.mainTabViewIdentity)

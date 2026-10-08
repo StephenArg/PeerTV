@@ -90,19 +90,19 @@ struct SearchView: View {
         }
         .task {
             vm.configure(instanceClient: session.apiClient, includeAllPrivacy: session.canSeeAllVideos)
-            if session.isAnonymous {
+            if !session.canBrowseInstance {
                 vm.mode = .global
             }
         }
         .onChange(of: session.isAnonymous) { _, anonymous in
-            if anonymous { vm.mode = .global }
+            if anonymous, !session.canBrowseInstance { vm.mode = .global }
         }
     }
 
     @ViewBuilder
     private var searchResultsContent: some View {
         VStack(alignment: .leading, spacing: 30) {
-            if !session.isAnonymous {
+            if session.canBrowseInstance {
                 Picker("Search scope", selection: $vm.mode) {
                     ForEach(SearchMode.allCases) { mode in
                         Text(mode.rawValue).tag(mode)

@@ -6,7 +6,7 @@ struct MainTabView: View {
     @StateObject private var playlistEditCoordinator = PlaylistEditCoordinator()
     /// Live, so toggling the Shuffle tab in Settings adds or removes it without relaunching.
     @AppStorage(DebugFlags.shuffleTabKey) private var shuffleEnabled = false
-    @AppStorage(TabBarStyle.storageKey) private var tabBarStyle: TabBarStyle = .sidebar
+    @AppStorage(TabBarStyle.storageKey) private var tabBarStyle: TabBarStyle = .topBar
 
     @State private var selectedTab: MainTabSelection = .home
     /// Bumped whenever the Playlists tab is selected so the list refetches (TabView often skips `onAppear` on return).
@@ -56,7 +56,10 @@ struct MainTabView: View {
                 SubscriptionsTab()
                     .tabItem { Label("Subscriptions", systemImage: "bell") }
                     .tag(MainTabSelection.subscriptions)
+            }
 
+            // Channels are public, so anonymous browsing with a server gets them too.
+            if session.canBrowseInstance {
                 ChannelsTab()
                     .tabItem { Label("Channels", systemImage: "person.2") }
                     .tag(MainTabSelection.channels)
@@ -68,7 +71,11 @@ struct MainTabView: View {
         }
         .modifier(TabBarStyleModifier(style: tabBarStyle))
         .onChange(of: session.isAnonymous) { _, anonymous in
-            if anonymous, selectedTab != .home, selectedTab != .history, selectedTab != .settings {
+            guard anonymous else { return }
+            let stillAvailable: Set<MainTabSelection> = session.canBrowseInstance
+                ? [.home, .history, .channels, .settings]
+                : [.home, .history, .settings]
+            if !stillAvailable.contains(selectedTab) {
                 selectedTab = .home
             }
         }

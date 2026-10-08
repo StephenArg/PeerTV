@@ -347,17 +347,17 @@ struct VideoDetailView: View {
             refreshSavedPosition()
         }
         .anonymousRestrictionAlert(isPresented: $showAnonymousRestriction) {
-            session.exitAnonymousToLogin()
+            session.leaveAnonymousMode()
         }
     }
 
     // MARK: - Channel row
 
-    /// The channel page loads from the connected instance, so videos opened from another server
-    /// (fediverse trending, Sepia Search, anonymous browsing) keep a plain label.
+    /// The channel page loads from the connected server, so videos opened from another server
+    /// (fediverse trending, Sepia Search, anonymous browsing without a server) keep a plain label.
     private var canOpenChannel: Bool {
         !vm.usesFederatedOrigin
-            && !session.isAnonymous
+            && session.canBrowseInstance
             && vm.video.flatMap(VideoDetailViewModel.channelHandle(for:)) != nil
     }
 

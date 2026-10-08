@@ -6,6 +6,9 @@ struct SettingsView: View {
     @State private var shuffleEnabled = DebugFlags.shuffleTabEnabled
     @State private var showVideoDetailRawJSON = DebugFlags.showVideoDetailRawJSON
     @State private var accountPendingSignOut: UUID?
+    @State private var showServerSwitch = false
+    /// Server picked in the switch flow, applied once its cover has closed.
+    @State private var pendingAnonymousServer: URL?
     @State private var showClearPositionsAlert = false
     @State private var savedPositionCount = PlaybackPositionStore.savedPositionCount
     @State private var resumePlaybackEnabled = PlaybackPositionStore.isEnabled
@@ -16,7 +19,7 @@ struct SettingsView: View {
     @AppStorage(PlayerSettings.bufferCapKey) private var bufferCapRawValue: Int = BufferCap.gb1.rawValue
     @AppStorage(PlayerSettings.defaultResolutionKey) private var defaultResolutionRawValue: Int = DefaultResolution.auto.rawValue
     @AppStorage(PlayerSettings.defaultPlaybackSpeedKey) private var defaultPlaybackSpeed: Double = 1.0
-    @AppStorage(TabBarStyle.storageKey) private var tabBarStyle: TabBarStyle = .sidebar
+    @AppStorage(TabBarStyle.storageKey) private var tabBarStyle: TabBarStyle = .topBar
 
     var body: some View {
         ScrollView {
@@ -24,6 +27,38 @@ struct SettingsView: View {
                 Text("Settings")
                     .font(.title3)
                     .bold()
+
+                settingsSection(title: "Accounts") {
+                    if session.isAnonymous {
+                        anonymousAccountsSection
+                    } else {
+                        ForEach(session.sortedAccounts) { account in
+                            accountRow(account)
+                        }
+                    }
+
+                    Button {
+                        session.beginAddAccount()
+                    } label: {
+                        HStack {
+                            Image(systemName: "plus.circle.fill")
+                            Text("Add Account")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 16)
+                        .padding(.horizontal, 20)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.card)
+                } footer: {
+                    if session.isAnonymous {
+                        Text("Sign out ends anonymous browsing and returns to sign-in, or to server selection when no server is chosen. Adding an account signs you in and leaves anonymous mode.")
+                    } else {
+                        Text("Select an account to use it for the whole app. Sign out removes saved login for that account only. Player, theme, and other app preferences stay shared.")
+                    }
+                }
 
                 if !session.isAnonymous {
                     settingsSection(title: "Downloads") {
@@ -96,38 +131,6 @@ struct SettingsView: View {
                     }
                 } footer: {
                     Text("The sidebar needs tvOS 18 or later; earlier versions always show the top bar.")
-                }
-
-                settingsSection(title: "Accounts") {
-                    if session.isAnonymous {
-                        anonymousAccountsSection
-                    } else {
-                        ForEach(session.sortedAccounts) { account in
-                            accountRow(account)
-                        }
-                    }
-
-                    Button {
-                        session.beginAddAccount()
-                    } label: {
-                        HStack {
-                            Image(systemName: "plus.circle.fill")
-                            Text("Add Account")
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 16)
-                        .padding(.horizontal, 20)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.card)
-                } footer: {
-                    if session.isAnonymous {
-                        Text("Sign out ends anonymous browsing and returns to the login screen. Adding an account signs you in and leaves anonymous mode.")
-                    } else {
-                        Text("Select an account to use it for the whole app. Sign out removes saved login for that account only. Player, theme, and other app preferences stay shared.")
-                    }
                 }
 
                 // settingsSection(title: "Appearance") {
@@ -288,6 +291,13 @@ struct SettingsView: View {
         }
     }
 
+    private var anonymousScopeDescription: String {
+        if let host = session.baseURL?.host, !host.isEmpty {
+            return "Public videos on \(host)"
+        }
+        return "Fediverse trending and Sepia Search only"
+    }
+
     private var anonymousAccountsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 20) {
@@ -299,14 +309,21 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Browsing anonymously")
                         .font(.headline)
-                    Text("Fediverse trending and Sepia Search only")
+                    Text(anonymousScopeDescription)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 16)
 
                 Button {
-                    session.exitAnonymousToLogin()
+                    showServerSwitch = true
+                } label: {
+                    Text(session.baseURL == nil ? "Choose Server" : "Switch Server")
+                        .foregroundStyle(.white)
+                }
+
+                Button {
+                    session.leaveAnonymousMode()
                 } label: {
                     Text("Sign Out")
                         .foregroundStyle(.white)
@@ -319,6 +336,18 @@ struct SettingsView: View {
                     .strokeBorder(Color.accentColor, lineWidth: 2)
             )
         }
+        .fullScreenCover(isPresented: $showServerSwitch, onDismiss: applyPendingAnonymousServer) {
+            ServerSwitchFlowView { url in
+                pendingAnonymousServer = url
+            }
+        }
+    }
+
+    /// Switching rebuilds the tabs for the new server, so it waits until the cover is gone.
+    private func applyPendingAnonymousServer() {
+        guard let url = pendingAnonymousServer else { return }
+        pendingAnonymousServer = nil
+        session.switchAnonymousServer(to: url)
     }
 
     private func accountRow(_ account: AccountRecord) -> some View {

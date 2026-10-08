@@ -7,6 +7,7 @@ struct InstanceSetupScreen<Host: AccountLoginHost>: View {
     var onBrowseAnonymously: () -> Void = {}
     @StateObject private var vm = InstanceSetupViewModel()
     @FocusState private var isURLFocused: Bool
+    @State private var showPopularServers = false
 
     var body: some View {
         OnboardingScreenLayout {
@@ -50,13 +51,108 @@ struct InstanceSetupScreen<Host: AccountLoginHost>: View {
                 }
                 .frame(maxWidth: 640)
 
-                if showsAnonymousEntry {
-                    OnboardingSecondaryButton(title: "Browse Anonymously", action: onBrowseAnonymously)
-                        .frame(maxWidth: 640)
+                HStack(spacing: 20) {
+                    OnboardingSecondaryButton(title: "Popular Servers") {
+                        showPopularServers = true
+                    }
+                    if showsAnonymousEntry {
+                        OnboardingSecondaryButton(title: "Browse Anonymously", action: onBrowseAnonymously)
+                    }
                 }
+                .frame(maxWidth: 640)
             }
         }
         .onAppear { isURLFocused = true }
+        .sheet(isPresented: $showPopularServers) {
+            PopularServersPickerView(vm: vm) { server in
+                showPopularServers = false
+                vm.urlText = server.url.absoluteString
+                Task { await vm.validate(using: host, onSuccess: onInstanceReady) }
+            }
+        }
+    }
+}
+
+/// Curated public servers with live details from the directory; picking one connects to it.
+struct PopularServersPickerView: View {
+    @ObservedObject var vm: InstanceSetupViewModel
+    let onSelect: (PopularServer) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("Public servers anyone can watch. Pick one to connect, then sign in or browse anonymously.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 50)
+
+                    LazyVStack(spacing: 16) {
+                        ForEach(vm.popularServers) { server in
+                            Button {
+                                onSelect(server)
+                            } label: {
+                                serverRow(server)
+                            }
+                            .buttonStyle(.card)
+                        }
+                    }
+                    .padding(.horizontal, 50)
+                }
+                .padding(.top, 30)
+                .padding(.bottom, 60)
+            }
+            .navigationTitle("Popular Servers")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if vm.isLoadingPopularServers {
+                        ProgressView()
+                    }
+                }
+            }
+        }
+        .task { await vm.loadPopularServers() }
+    }
+
+    private func serverRow(_ server: PopularServer) -> some View {
+        HStack(alignment: .center, spacing: 24) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(server.displayName)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                Text(server.host)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(server.blurb)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+
+            Spacer(minLength: 16)
+
+            if let directory = server.directory {
+                VStack(alignment: .trailing, spacing: 4) {
+                    if let videos = directory.totalLocalVideos {
+                        Text("\(videos.formatted(.number.notation(.compactName))) videos")
+                    }
+                    if let users = directory.totalUsers {
+                        Text("\(users.formatted(.number.notation(.compactName))) users")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            }
+        }
+        .padding(.horizontal, 30)
+        .padding(.vertical, 18)
     }
 }
 
@@ -91,9 +187,10 @@ struct LoginScreen<Host: AccountLoginHost>: View {
         let username: String
     }
 
+    /// Names the selected server; "Change Instance" below the form goes back to pick another.
     private var instanceSubtitle: String {
         if let base = host.baseURL {
-            return base.host ?? base.absoluteString
+            return "Sign in to \(base.host ?? base.absoluteString)"
         }
         return "Sign in to your PeerTube account"
     }
