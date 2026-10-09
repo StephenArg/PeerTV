@@ -22,8 +22,18 @@ struct Video: Decodable, Identifiable, Hashable {
     let files: [VideoFile]?
     /// When set (e.g. peertube.watch index from hot API), comment threads may be more complete here than on `originHost`.
     let commentReadHost: String?
+    /// The spoken language. PeerTube sends `{id: null, label: "Unknown"}` when none is set.
+    let language: VideoLanguage?
+    /// Detail responses only; list rows have none.
+    let tags: [String]?
 
     var stableId: String { uuid ?? "\(id ?? 0)" }
+
+    /// The language code when one is set (`nil` for PeerTube's `{id: null}` placeholder).
+    var languageId: String? {
+        let id = language?.id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return id.isEmpty ? nil : id
+    }
 
     init(
         id: Int?,
@@ -44,7 +54,9 @@ struct Video: Decodable, Identifiable, Hashable {
         privacy: VideoPrivacy?,
         streamingPlaylists: [StreamingPlaylist]?,
         files: [VideoFile]?,
-        commentReadHost: String? = nil
+        commentReadHost: String? = nil,
+        language: VideoLanguage? = nil,
+        tags: [String]? = nil
     ) {
         self.id = id
         self.uuid = uuid
@@ -65,6 +77,8 @@ struct Video: Decodable, Identifiable, Hashable {
         self.streamingPlaylists = streamingPlaylists
         self.files = files
         self.commentReadHost = commentReadHost
+        self.language = language
+        self.tags = tags
     }
 
     init(from decoder: Decoder) throws {
@@ -98,12 +112,14 @@ struct Video: Decodable, Identifiable, Hashable {
         streamingPlaylists = try c.decodeIfPresent([StreamingPlaylist].self, forKey: .streamingPlaylists)
         files = try c.decodeIfPresent([VideoFile].self, forKey: .files)
         commentReadHost = nil
+        language = try? c.decodeIfPresent(VideoLanguage.self, forKey: .language)
+        tags = try? c.decodeIfPresent([String].self, forKey: .tags)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, uuid, name, description, duration, views, likes, dislikes
         case createdAt, publishedAt, thumbnailPath, previewPath, thumbnails, embedPath
-        case channel, account, privacy, streamingPlaylists, files
+        case channel, account, privacy, streamingPlaylists, files, language, tags
     }
 
     /// Federated origin hostname (no scheme), when the video is not on the connected instance.
@@ -234,7 +250,9 @@ struct Video: Decodable, Identifiable, Hashable {
             privacy: privacy,
             streamingPlaylists: streamingPlaylists,
             files: files,
-            commentReadHost: indexHost ?? commentReadHost
+            commentReadHost: indexHost ?? commentReadHost,
+            language: language,
+            tags: tags
         )
     }
 
@@ -261,7 +279,9 @@ struct Video: Decodable, Identifiable, Hashable {
             privacy: privacy,
             streamingPlaylists: streamingPlaylists,
             files: files,
-            commentReadHost: trimmed
+            commentReadHost: trimmed,
+            language: language,
+            tags: tags
         )
     }
 
@@ -311,7 +331,9 @@ struct Video: Decodable, Identifiable, Hashable {
             privacy: privacy,
             streamingPlaylists: streamingPlaylists,
             files: files,
-            commentReadHost: commentReadHost
+            commentReadHost: commentReadHost,
+            language: language,
+            tags: tags
         )
     }
 
@@ -381,7 +403,9 @@ struct Video: Decodable, Identifiable, Hashable {
             privacy: privacy,
             streamingPlaylists: streamingPlaylists,
             files: files,
-            commentReadHost: commentReadHost
+            commentReadHost: commentReadHost,
+            language: language,
+            tags: tags
         )
     }
 
@@ -415,7 +439,9 @@ struct Video: Decodable, Identifiable, Hashable {
             privacy: privacy,
             streamingPlaylists: streamingPlaylists,
             files: files,
-            commentReadHost: commentReadHost
+            commentReadHost: commentReadHost,
+            language: language,
+            tags: tags
         )
     }
 
@@ -696,6 +722,12 @@ extension Array where Element == VideoThumbnail {
 
 struct VideoPrivacy: Decodable {
     let id: Int?
+    let label: String?
+}
+
+/// `language` on a video: an ISO 639 code such as `en` or `pt-BR` and its English label.
+struct VideoLanguage: Decodable, Hashable {
+    let id: String?
     let label: String?
 }
 

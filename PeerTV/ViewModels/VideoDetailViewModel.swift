@@ -6,6 +6,8 @@ final class VideoDetailViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var rawJSON: String?
+    /// Subtitle languages (`GET …/captions`), shown as pills under the description.
+    @Published private(set) var captionLanguages: [VideoDetailPill] = []
 
     @Published var userRating: String = "none"
     /// Set when a like or dislike couldn't be saved; the view shows it in an alert.
@@ -122,8 +124,46 @@ final class VideoDetailViewModel: ObservableObject {
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             video = try decoder.decode(Video.self, from: data)
             await enrichChannelAvatarsIfNeeded()
+            await loadCaptionLanguages()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Pills for the detail page: the spoken language, each subtitle language, then the tags.
+    var detailPills: [VideoDetailPill] {
+        guard let video else { return [] }
+        var pills: [VideoDetailPill] = []
+        if let code = video.languageId {
+            let label = video.language?.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            pills.append(VideoDetailPill(kind: .language, text: label.isEmpty ? code : label))
+        }
+        pills.append(contentsOf: captionLanguages)
+        for tag in video.tags ?? [] {
+            let trimmed = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                pills.append(VideoDetailPill(kind: .tag, text: trimmed))
+            }
+        }
+        return pills
+    }
+
+    private func loadCaptionLanguages() async {
+        guard let apiClient else { return }
+        do {
+            let response: VideoCaptionsResponse = try await apiClient.request(.videoCaptions(id: videoId))
+            var seen = Set<String>()
+            captionLanguages = (response.data ?? []).compactMap { caption in
+                guard let id = caption.language?.id, !id.isEmpty, seen.insert(id).inserted else { return nil }
+                let label = caption.language?.label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return VideoDetailPill(
+                    kind: caption.automaticallyGenerated == true ? .autoSubtitles : .subtitles,
+                    text: label.isEmpty ? id : label
+                )
+            }
+        } catch {
+            // Captions are optional; many servers 404 here for remote videos.
+            captionLanguages = []
         }
     }
 
@@ -471,6 +511,47 @@ final class VideoDetailViewModel: ObservableObject {
             selectedCommentId = nil
         } else {
             selectedCommentId = id
+        }
+    }
+}
+
+/// One pill under a video's description: its language, a subtitle track, or a tag.
+struct VideoDetailPill: Identifiable, Hashable {
+    enum Kind: String {
+        case language
+        case subtitles
+        case autoSubtitles
+        case tag
+    }
+
+    let kind: Kind
+    let text: String
+
+    var id: String { "\(kind.rawValue):\(text)" }
+
+    /// Tags read as hashtags; the others carry an icon instead.
+    var title: String {
+        switch kind {
+        case .tag: "#\(text)"
+        case .autoSubtitles: "\(text) (auto)"
+        case .language, .subtitles: text
+        }
+    }
+
+    var systemImage: String? {
+        switch kind {
+        case .language: "character.bubble"
+        case .subtitles, .autoSubtitles: "captions.bubble"
+        case .tag: nil
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch kind {
+        case .language: "Language: \(text)"
+        case .subtitles: "Subtitles: \(text)"
+        case .autoSubtitles: "Automatic subtitles: \(text)"
+        case .tag: "Tag: \(text)"
         }
     }
 }

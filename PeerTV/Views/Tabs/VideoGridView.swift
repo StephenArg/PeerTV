@@ -13,7 +13,11 @@ struct VideoGridView: View {
     @State private var showSortDialog = false
     @State private var showScopeDialog = false
     @State private var showFediverseLanguagePicker = false
-    @State private var showCategoryPicker = false
+    @State private var showFiltersSheet = false
+    /// What the Filters sheet edits; applied when it closes.
+    @State private var draftFilters = HomeVideoFilters()
+    /// What the Fediverse Languages sheet edits; applied when it closes.
+    @State private var draftFediverseLanguages: Set<String> = []
     /// False when another tab is selected so we do not scroll/focus the home grid when the player dismisses from elsewhere.
     @State private var isHomeGridOnScreen = false
     @FocusState private var homeGridFocusVideoId: String?
@@ -95,13 +99,14 @@ struct VideoGridView: View {
                                 .buttonStyle(.card)
                             }
 
-                            if session.canBrowseInstance, vm.showsCategoryControls {
+                            if session.canBrowseInstance, vm.showsFilterControls {
                                 Button {
-                                    showCategoryPicker = true
+                                    draftFilters = vm.filters
+                                    showFiltersSheet = true
                                 } label: {
                                     HStack(spacing: 20) {
-                                        Image(systemName: "folder")
-                                        Text(vm.categoryButtonTitle)
+                                        Image(systemName: "line.3.horizontal.decrease.circle")
+                                        Text(vm.filtersButtonTitle)
                                             .lineLimit(1)
                                             .minimumScaleFactor(0.72)
                                     }
@@ -114,6 +119,7 @@ struct VideoGridView: View {
 
                             if isFediverseTrending {
                                 Button {
+                                    draftFediverseLanguages = Set(vm.fediverseLanguageIds)
                                     showFediverseLanguagePicker = true
                                 } label: {
                                     HStack(spacing: 20) {
@@ -225,6 +231,8 @@ struct VideoGridView: View {
         .overlay {
             if let error = vm.errorMessage, vm.videos.isEmpty {
                 ContentUnavailableView(error, systemImage: "exclamationmark.triangle")
+            } else if vm.isEmptyAfterLoad {
+                emptyListView
             }
         }
         .navigationDestination(isPresented: $showDetail) {
@@ -239,20 +247,20 @@ struct VideoGridView: View {
                 .environmentObject(session)
                 .presentationBackground(.black)
         }
-        .sheet(isPresented: $showFediverseLanguagePicker) {
-            FediverseLanguagePickerView(initialSelection: Set(vm.fediverseLanguageIds)) { selection in
-                Task { await vm.applyFediverseLanguages(selection) }
-            }
+        .sheet(isPresented: $showFediverseLanguagePicker, onDismiss: {
+            Task { await vm.applyFediverseLanguages(draftFediverseLanguages) }
+        }) {
+            FediverseLanguagePickerView(selection: $draftFediverseLanguages)
         }
-        .sheet(isPresented: $showCategoryPicker) {
-            VideoCategoryPickerView(
+        .sheet(isPresented: $showFiltersSheet, onDismiss: {
+            Task { await vm.applyFilters(draftFilters) }
+        }) {
+            HomeFiltersPickerView(
                 categories: vm.categoryMenuItems,
-                initialSelection: Set(vm.selectedCategoryIds)
-            ) { selection in
-                Task { @MainActor in
-                    await vm.applyCategories(selection)
-                }
-            }
+                commonLanguages: vm.commonLanguageMenuItems,
+                otherLanguages: vm.otherLanguageMenuItems,
+                filters: $draftFilters
+            )
         }
         .confirmationDialog(
             "Sort by",
@@ -291,7 +299,7 @@ struct VideoGridView: View {
                 includeAllPrivacy: session.canSeeAllVideos
             )
             if session.canBrowseInstance {
-                await vm.refreshCategoryMenuItems()
+                await vm.refreshFilterMenuItems()
                 await vm.loadInitialIfEmpty()
             } else {
                 // Anonymous with no server: fediverse trending is all there is.
@@ -327,6 +335,79 @@ struct VideoGridView: View {
 }
 
 private extension VideoGridView {
+    /// Shown when the list loaded and nothing matched. Names what narrowed it (the Fediverse
+    /// languages, or the Filters) and offers to change or clear that, so an empty grid never
+    /// looks like the selector did nothing.
+    @ViewBuilder
+    var emptyListView: some View {
+        if isFediverseTrending {
+            if vm.fediverseLanguageIds.isEmpty {
+                ContentUnavailableView(
+                    "Nothing Trending",
+                    systemImage: "globe",
+                    description: Text("The fediverse trending feed returned no videos. Try again later.")
+                )
+            } else {
+                ContentUnavailableView {
+                    Label("Nothing Trending in \(vm.fediverseLanguageNames)", systemImage: "character.bubble")
+                } description: {
+                    Text("No videos in \(vm.fediverseLanguageIds.count == 1 ? "this language" : "these languages") made the trending feed in the last 30 days.")
+                } actions: {
+                    HStack(spacing: 30) {
+                        Button("Change Languages") {
+                            draftFediverseLanguages = Set(vm.fediverseLanguageIds)
+                            showFediverseLanguagePicker = true
+                        }
+                        Button("Show All Languages") {
+                            Task { await vm.applyFediverseLanguages([]) }
+                        }
+                    }
+                }
+            }
+        } else if !vm.filters.isEmpty {
+            ContentUnavailableView {
+                Label("No Videos Match Your Filters", systemImage: "line.3.horizontal.decrease.circle")
+            } description: {
+                Text(emptyFilteredDescription)
+            } actions: {
+                HStack(spacing: 30) {
+                    Button("Change Filters") {
+                        draftFilters = vm.filters
+                        showFiltersSheet = true
+                    }
+                    Button("Clear Filters") {
+                        Task { await vm.applyFilters(HomeVideoFilters()) }
+                    }
+                }
+            }
+        } else {
+            ContentUnavailableView(
+                "No Videos",
+                systemImage: "film",
+                description: Text(vm.currentListScope == .local
+                    ? "This server has no public videos yet."
+                    : "This server has no videos to show yet.")
+            )
+        }
+    }
+
+    var emptyFilteredDescription: String {
+        var parts: [String] = []
+        if !vm.filters.languageIds.isEmpty {
+            parts.append("Most uploads have no language set, so a language filter leaves them out unless “Not specified” is selected too.")
+            if !vm.filters.includeSubtitled {
+                parts.append("Videos that only have subtitles in these languages are left out unless the filter is set to “Spoken or subtitled in”.")
+            }
+        }
+        if vm.filters.live == .liveOnly {
+            parts.append("Nothing is live right now.")
+        }
+        if vm.currentListScope == .local {
+            parts.append("Only videos hosted on this server are being shown.")
+        }
+        return parts.isEmpty ? "Try fewer filters." : parts.joined(separator: " ")
+    }
+
     /// Runs on the first appearance only; later appearances (back from a video, another tab)
     /// keep the focus restore the grid already does.
     func placeInitialFocusIfNeeded() {

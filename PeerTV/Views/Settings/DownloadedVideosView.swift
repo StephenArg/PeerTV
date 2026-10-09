@@ -4,22 +4,54 @@ struct DownloadedVideosView: View {
     @EnvironmentObject private var session: SessionStore
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var downloadManager = DownloadManager.shared
+    @AppStorage(DownloadsSort.defaultsKey) private var sort: DownloadsSort = .newest
     @State private var editMode = false
     @State private var showRemoveAllConfirmation = false
+    @State private var showSortDialog = false
+    /// True when shown as the Downloads tab, where there is nothing to go back to.
+    var isTabRoot = false
     @State private var detailVideoId: String = ""
     @State private var showDetail = false
+
+    /// Three cards per line, each a third of the width.
+    private let columns = [
+        GridItem(.flexible(), spacing: 30, alignment: .top),
+        GridItem(.flexible(), spacing: 30, alignment: .top),
+        GridItem(.flexible(), spacing: 30, alignment: .top)
+    ]
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
                 HStack(spacing: 20) {
-                    Text("Downloaded Videos")
-                        .font(.title3)
-                        .bold()
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Downloads")
+                            .font(.title3)
+                            .bold()
+                        if !downloadManager.downloadedVideos.isEmpty {
+                            Text(downloadManager.downloadedVideos.storageSummary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
 
                     Spacer()
 
                     if !downloadManager.downloadedVideos.isEmpty {
+                        Button {
+                            showSortDialog = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "arrow.up.arrow.down.circle")
+                                Text(sort.displayName)
+                                    .lineLimit(1)
+                            }
+                            .font(.callout)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 16)
+                        }
+                        .buttonStyle(.card)
+
                         Button {
                             editMode.toggle()
                         } label: {
@@ -55,24 +87,26 @@ struct DownloadedVideosView: View {
                             systemImage: "arrow.down.circle",
                             description: Text("Videos you download will appear here.")
                         )
-                        Button {
-                            dismiss()
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "chevron.backward")
-                                Text("Back")
+                        if !isTabRoot {
+                            Button {
+                                dismiss()
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "chevron.backward")
+                                    Text("Back")
+                                }
+                                .font(.callout)
+                                .padding(.horizontal, 28)
+                                .padding(.vertical, 14)
                             }
-                            .font(.callout)
-                            .padding(.horizontal, 28)
-                            .padding(.vertical, 14)
+                            .buttonStyle(.borderedProminent)
                         }
-                        .buttonStyle(.borderedProminent)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 60)
                 } else {
-                    LazyVStack(spacing: 16) {
-                        ForEach(downloadManager.downloadedVideos) { video in
+                    LazyVGrid(columns: columns, spacing: 24) {
+                        ForEach(sort.sorted(downloadManager.downloadedVideos)) { video in
                             downloadRow(video)
                         }
                     }
@@ -84,6 +118,14 @@ struct DownloadedVideosView: View {
         }
         .navigationDestination(isPresented: $showDetail) {
             VideoDetailView(videoId: detailVideoId)
+        }
+        .confirmationDialog("Sort by", isPresented: $showSortDialog, titleVisibility: .visible) {
+            ForEach(DownloadsSort.allCases) { option in
+                Button(option == sort ? "\(option.displayName) ✓" : option.displayName) {
+                    sort = option
+                }
+            }
+            Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog(
             "Remove all downloaded videos?",
@@ -112,19 +154,19 @@ struct DownloadedVideosView: View {
                 )
             }
         } label: {
-            HStack(spacing: 20) {
+            HStack(spacing: 16) {
                 ZStack(alignment: .bottomLeading) {
                     if let thumbPath = video.thumbnailPath {
                         CachedAsyncImage(
                             url: session.thumbnailURL(path: thumbPath)
                         )
                         .aspectRatio(16 / 9, contentMode: .fill)
-                        .frame(width: 200, height: 112)
+                        .frame(width: 176, height: 99)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                     } else {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(.quaternary)
-                            .frame(width: 200, height: 112)
+                            .frame(width: 176, height: 99)
                             .overlay {
                                 Image(systemName: "film")
                                     .font(.title)
@@ -144,14 +186,21 @@ struct DownloadedVideosView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(video.name)
-                        .font(.body)
-                        .lineLimit(2)
+                    // Always reserve two title lines so the cards in a row are the same height.
+                    ZStack(alignment: .topLeading) {
+                        Text(" \n ")
+                            .font(.body)
+                            .hidden()
+                        Text(video.name)
+                            .font(.body)
+                            .lineLimit(2)
+                    }
 
                     if let channel = video.channelName {
                         Text(channel)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
 
                     HStack(spacing: 16) {
@@ -163,6 +212,8 @@ struct DownloadedVideosView: View {
                     }
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
 
                     Text(video.downloadedAt, style: .date)
                         .font(.caption2)
@@ -177,7 +228,7 @@ struct DownloadedVideosView: View {
                         .foregroundStyle(.red)
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
             .padding(.vertical, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }

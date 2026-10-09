@@ -18,8 +18,9 @@ enum Endpoint {
     case usersToken
 
     // Videos
-    case videos(sort: String, start: Int, count: Int, includeAllPrivacy: Bool = false, isLocal: Bool? = nil, categoryIds: [Int] = [])
+    case videos(sort: String, start: Int, count: Int, includeAllPrivacy: Bool = false, isLocal: Bool? = nil, categoryIds: [Int] = [], languageIds: [String] = [], isLive: Bool? = nil)
     case videoCategories
+    case videoLanguages
     case videoDetail(id: String)
     case deleteVideo(id: String)
     case videoFileToken(id: String)
@@ -31,7 +32,10 @@ enum Endpoint {
     case postVideoComment(videoId: String, text: String)
 
     // Channels
-    case videoChannels(start: Int, count: Int)
+    case videoChannels(start: Int, count: Int, sort: String = "-createdAt")
+    /// Channel search. Without `search`, lists the channels of `host` (used for "this server only");
+    /// that route only sorts by `-createdAt` (or `-match` with a term).
+    case searchVideoChannels(search: String?, host: String?, start: Int, count: Int, sort: String)
     case channelDetail(handle: String)
     case channelVideos(handle: String, start: Int, count: Int, sort: String, includeAllPrivacy: Bool = false)
     case channelPlaylists(handle: String, start: Int, count: Int)
@@ -94,6 +98,8 @@ enum Endpoint {
             return "/api/v1/videos"
         case .videoCategories:
             return "/api/v1/videos/categories"
+        case .videoLanguages:
+            return "/api/v1/videos/languages"
         case .videoDetail(let id), .deleteVideo(let id):
             return "/api/v1/videos/\(id)"
         case .videoFileToken(let id):
@@ -110,6 +116,8 @@ enum Endpoint {
             return "/api/v1/videos/\(id)/comment-threads/\(threadId)"
         case .videoChannels:
             return "/api/v1/video-channels"
+        case .searchVideoChannels:
+            return "/api/v1/search/video-channels"
         case .channelDetail(let handle):
             return "/api/v1/video-channels/\(handle)"
         case .channelVideos(let handle, _, _, _, _):
@@ -172,16 +180,25 @@ enum Endpoint {
 
     var queryItems: [URLQueryItem] {
         switch self {
-        case .videos(let sort, let start, let count, let includeAllPrivacy, let isLocal, let categoryIds):
+        case .videos(let sort, let start, let count, let includeAllPrivacy, let isLocal, let categoryIds, let languageIds, let isLive):
             var items = paging(start: start, count: count) + [URLQueryItem(name: "sort", value: sort)]
             if includeAllPrivacy { items.append(contentsOf: allPrivacyItems()) }
             if let isLocal { items.append(URLQueryItem(name: "isLocal", value: isLocal ? "true" : "false")) }
             for id in categoryIds {
                 items.append(URLQueryItem(name: "categoryOneOf", value: "\(id)"))
             }
+            for id in languageIds {
+                items.append(URLQueryItem(name: "languageOneOf", value: id))
+            }
+            if let isLive { items.append(URLQueryItem(name: "isLive", value: isLive ? "true" : "false")) }
             return items
-        case .videoChannels(let start, let count):
-            return paging(start: start, count: count)
+        case .videoChannels(let start, let count, let sort):
+            return paging(start: start, count: count) + [URLQueryItem(name: "sort", value: sort)]
+        case .searchVideoChannels(let search, let host, let start, let count, let sort):
+            var items = paging(start: start, count: count) + [URLQueryItem(name: "sort", value: sort)]
+            if let search, !search.isEmpty { items.append(URLQueryItem(name: "search", value: search)) }
+            if let host, !host.isEmpty { items.append(URLQueryItem(name: "host", value: host)) }
+            return items
         case .channelVideos(_, let start, let count, let sort, let includeAllPrivacy):
             var items = paging(start: start, count: count) + [URLQueryItem(name: "sort", value: sort)]
             if includeAllPrivacy { items.append(contentsOf: allPrivacyItems()) }
@@ -307,15 +324,19 @@ extension Endpoint {
     /// Short label for Unified Logging (paths + non-sensitive parameters only).
     var networkLogDescription: String {
         switch self {
-        case .videos(let sort, let start, let count, let includeAllPrivacy, let isLocal, let categoryIds):
+        case .videos(let sort, let start, let count, let includeAllPrivacy, let isLocal, let categoryIds, let languageIds, let isLive):
             let scope = isLocal.map { $0 ? "local" : "remote" } ?? "all"
-            return "GET /api/v1/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy) scope=\(scope) categories=\(categoryIds.count)"
+            let live = isLive.map { $0 ? "live" : "recorded" } ?? "any"
+            return "GET /api/v1/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy) scope=\(scope) categories=\(categoryIds.count) languages=\(languageIds.count) live=\(live)"
         case .channelVideos(let handle, let start, let count, let sort, let includeAllPrivacy):
             return "GET …/video-channels/\(handle)/videos sort=\(sort) start=\(start) count=\(count) includeAllPrivacy=\(includeAllPrivacy)"
         case .searchVideos(let search, let start, let count, let scope, let includeAllPrivacy):
             let q = String(search.prefix(64))
             let scopeLabel = scope == .global ? "global" : "instance"
             return "GET /api/v1/search/videos q=\(q) start=\(start) count=\(count) scope=\(scopeLabel) includeAllPrivacy=\(includeAllPrivacy)"
+        case .searchVideoChannels(let search, let host, let start, let count, let sort):
+            let q = String((search ?? "").prefix(64))
+            return "GET /api/v1/search/video-channels q=\(q) host=\(host ?? "any") sort=\(sort) start=\(start) count=\(count)"
         case .subscriptionExist(let uri):
             return "GET …/subscriptions/exist uri=\(String(uri.prefix(120)))"
         case .subscribe(let uri):

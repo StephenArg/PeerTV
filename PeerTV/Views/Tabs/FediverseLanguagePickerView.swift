@@ -1,76 +1,38 @@
 import SwiftUI
 
 /// Multiselect language filter for Trending on Fediverse (`language_id` on peertube.watch hot API).
+/// Edits a draft; the caller applies it when the sheet closes, whether through Done or the Menu button.
 struct FediverseLanguagePickerView: View {
-    @Environment(\.dismiss) private var dismiss
+    @Binding var selection: Set<String>
 
-    let initialSelection: Set<String>
-    let onApply: (Set<String>) -> Void
-
-    @State private var selection: Set<String>
-
-    init(initialSelection: Set<String>, onApply: @escaping (Set<String>) -> Void) {
-        self.initialSelection = initialSelection
-        self.onApply = onApply
-        _selection = State(initialValue: initialSelection)
-    }
+    private let columns = [
+        GridItem(.flexible(), spacing: 24),
+        GridItem(.flexible(), spacing: 24)
+    ]
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    Text("Show trending videos in these languages. Leave all off for every language.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 50)
-
-                    LazyVStack(spacing: 16) {
-                        ForEach(FediverseHotLanguage.allInOrder) { language in
-                            Button {
-                                toggle(language.rawValue)
-                            } label: {
-                                HStack(spacing: 20) {
-                                    Text(language.displayName)
-                                        .font(.callout)
-                                    Spacer()
-                                    if selection.contains(language.rawValue) {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(.primary)
-                                    }
-                                }
-                                .padding(.horizontal, 40)
-                                .padding(.vertical, 16)
+        FilterSheetLayout(
+            title: "Languages",
+            summary: selection.isEmpty
+                ? "Showing trending videos in every language."
+                : "\(selection.count) selected.",
+            clearDisabled: selection.isEmpty,
+            onClear: { selection = [] }
+        ) {
+            VStack(alignment: .leading, spacing: 28) {
+                FilterSectionHeader(title: "Show trending videos in")
+                LazyVGrid(columns: columns, spacing: 20) {
+                    ForEach(FediverseHotLanguage.allInOrder) { language in
+                        FilterChoiceButton(label: language.displayName, selected: selection.contains(language.rawValue)) {
+                            if selection.contains(language.rawValue) {
+                                selection.remove(language.rawValue)
+                            } else {
+                                selection.insert(language.rawValue)
                             }
-                            .buttonStyle(.card)
                         }
                     }
-                    .padding(.horizontal, 50)
-                }
-                .padding(.top, 30)
-                .padding(.bottom, 60)
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Clear") {
-                        selection = []
-                    }
-                    .disabled(selection.isEmpty)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        onApply(selection)
-                        dismiss()
-                    }
                 }
             }
-        }
-    }
-
-    private func toggle(_ code: String) {
-        if selection.contains(code) {
-            selection.remove(code)
-        } else {
-            selection.insert(code)
         }
     }
 }

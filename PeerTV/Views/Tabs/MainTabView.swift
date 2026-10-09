@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MainTabView: View {
     @EnvironmentObject var session: SessionStore
+    @EnvironmentObject private var downloadManager: DownloadManager
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var playlistEditCoordinator = PlaylistEditCoordinator()
     /// Live, so toggling the Shuffle tab in Settings adds or removes it without relaunching.
@@ -52,6 +53,13 @@ struct MainTabView: View {
                 .tabItem { Label("History", systemImage: "clock") }
                 .tag(MainTabSelection.history)
 
+            // Only while this account has downloads; the Settings row covers the empty case.
+            if !isAnonymous, !downloadManager.downloadedVideos.isEmpty {
+                DownloadsTab()
+                    .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
+                    .tag(MainTabSelection.downloads)
+            }
+
             if !isAnonymous {
                 SubscriptionsTab()
                     .tabItem { Label("Subscriptions", systemImage: "bell") }
@@ -81,6 +89,11 @@ struct MainTabView: View {
         }
         .onChange(of: shuffleEnabled) { _, enabled in
             if !enabled, selectedTab == .shuffle {
+                selectedTab = .home
+            }
+        }
+        .onChange(of: downloadManager.downloadedVideos.isEmpty) { _, empty in
+            if empty, selectedTab == .downloads {
                 selectedTab = .home
             }
         }
@@ -145,7 +158,7 @@ struct MainTabView: View {
             subscriptionsTabRefreshToken += 1
         case .channels:
             channelsTabRefreshToken += 1
-        case .home, .shuffle, .playlists, .settings:
+        case .home, .shuffle, .playlists, .downloads, .settings:
             break
         }
     }
@@ -190,6 +203,7 @@ private enum MainTabSelection: Hashable {
     case shuffle
     case subscriptions
     case history
+    case downloads
     case playlists
     case channels
     case settings
@@ -271,6 +285,16 @@ private struct ShuffleTab: View {
     var body: some View {
         NavigationStack(path: $path) {
             ShuffleView()
+                .withSharedDestinations()
+        }
+    }
+}
+
+private struct DownloadsTab: View {
+    @State private var path = NavigationPath()
+    var body: some View {
+        NavigationStack(path: $path) {
+            DownloadedVideosView(isTabRoot: true)
                 .withSharedDestinations()
         }
     }

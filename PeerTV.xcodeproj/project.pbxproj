@@ -57,8 +57,8 @@
 		C63231B87BA379DD1729BEFF /* TokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6BA5EF17722A7D480F817B6 /* TokenStore.swift */; };
 		C6578A5A6D45933237D4BB0E /* Subscription.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2194DE259D2983B43AF741C1 /* Subscription.swift */; };
 		C68FA32F30E6ECA50F217955 /* VideoPlaylist.swift in Sources */ = {isa = PBXBuildFile; fileRef = 942FE90E12B0B47F1E47A3B2 /* VideoPlaylist.swift */; };
-		CATMDLBB000000000000001 /* VideoCategory.swift in Sources */ = {isa = PBXBuildFile; fileRef = CATMDLAA000000000000001 /* VideoCategory.swift */; };
-		CATPICKBB000000000000001 /* VideoCategoryPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CATPICKAA000000000000001 /* VideoCategoryPickerView.swift */; };
+		CATMDLBB000000000000001 /* HomeVideoFilters.swift in Sources */ = {isa = PBXBuildFile; fileRef = CATMDLAA000000000000001 /* HomeVideoFilters.swift */; };
+		CATPICKBB000000000000001 /* HomeFiltersPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CATPICKAA000000000000001 /* HomeFiltersPickerView.swift */; };
 		CC11223344556677AABB0001 /* ShuffleViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11223344556677AABB0002 /* ShuffleViewModel.swift */; };
 		CC99001122334455AA66BB02 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC99001122334455AA66BB01 /* AppTheme.swift */; };
 		CH11223344556677AABB0002 /* ControlsHelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CH11223344556677AABB0001 /* ControlsHelpView.swift */; };
@@ -150,8 +150,8 @@
 		BB445566778899AACC0002 /* HTMLPlainText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTMLPlainText.swift; sourceTree = "<group>"; };
 		BC63E4AC368A691A0196DFC3 /* Video.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Video.swift; sourceTree = "<group>"; };
 		C1B94BCF6FE05590AA24FC42 /* OAuthModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthModels.swift; sourceTree = "<group>"; };
-		CATMDLAA000000000000001 /* VideoCategory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCategory.swift; sourceTree = "<group>"; };
-		CATPICKAA000000000000001 /* VideoCategoryPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoCategoryPickerView.swift; sourceTree = "<group>"; };
+		CATMDLAA000000000000001 /* HomeVideoFilters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeVideoFilters.swift; sourceTree = "<group>"; };
+		CATPICKAA000000000000001 /* HomeFiltersPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFiltersPickerView.swift; sourceTree = "<group>"; };
 		CC11223344556677AABB0002 /* ShuffleViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShuffleViewModel.swift; sourceTree = "<group>"; };
 		CC99001122334455AA66BB01 /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
 		CH11223344556677AABB0001 /* ControlsHelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlsHelpView.swift; sourceTree = "<group>"; };
@@ -250,7 +250,7 @@
 				216F76B265C16AAECE2543BE /* SubscriptionsView.swift */,
 				75E46EDE3001222FB67D18EF /* VideoGridView.swift */,
 				FEDPICKAA000000000000001 /* FediverseLanguagePickerView.swift */,
-				CATPICKAA000000000000001 /* VideoCategoryPickerView.swift */,
+				CATPICKAA000000000000001 /* HomeFiltersPickerView.swift */,
 			);
 			path = Tabs;
 			sourceTree = "<group>";
@@ -328,7 +328,7 @@
 				AA11223344556677AABB0002 /* RandomVideo.swift */,
 				AA33445566778899BB0002 /* FediverseHotVideo.swift */,
 				FEDLANGAA000000000000001 /* FediverseHotLanguage.swift */,
-				CATMDLAA000000000000001 /* VideoCategory.swift */,
+				CATMDLAA000000000000001 /* HomeVideoFilters.swift */,
 				SB33445566778899AABB0002 /* VideoStoryboard.swift */,
 				VC11223344556677AABB0002 /* VideoCaption.swift */,
 				2194DE259D2983B43AF741C1 /* Subscription.swift */,
@@ -570,8 +570,8 @@
 				AA33445566778899BB0001 /* FediverseHotVideo.swift in Sources */,
 				FEDLANGBB000000000000001 /* FediverseHotLanguage.swift in Sources */,
 				FEDPICKBB000000000000001 /* FediverseLanguagePickerView.swift in Sources */,
-				CATMDLBB000000000000001 /* VideoCategory.swift in Sources */,
-				CATPICKBB000000000000001 /* VideoCategoryPickerView.swift in Sources */,
+				CATMDLBB000000000000001 /* HomeVideoFilters.swift in Sources */,
+				CATPICKBB000000000000001 /* HomeFiltersPickerView.swift in Sources */,
 				SB33445566778899AABB0001 /* VideoStoryboard.swift in Sources */,
 				VC11223344556677AABB0001 /* VideoCaption.swift in Sources */,
 				CC11223344556677AABB0001 /* ShuffleViewModel.swift in Sources */,

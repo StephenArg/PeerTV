@@ -6,6 +6,9 @@ enum HomeVideoListSort: String, CaseIterable, Identifiable {
     case recentlyAdded = "-publishedAt"
     case name = "name"
     case trending = "-trending"
+    case hot = "-hot"
+    case mostViewed = "-views"
+    case mostLiked = "-likes"
 
     var id: String { rawValue }
 
@@ -14,11 +17,14 @@ enum HomeVideoListSort: String, CaseIterable, Identifiable {
         case .recentlyAdded: "Recently Added"
         case .name: "Name"
         case .trending: "Trending"
+        case .hot: "Hot"
+        case .mostViewed: "Most Viewed"
+        case .mostLiked: "Most Liked"
         }
     }
 
     /// Order shown in the home sort dialog.
-    static let dialogOrder: [HomeVideoListSort] = [.recentlyAdded, .name, .trending]
+    static let dialogOrder: [HomeVideoListSort] = [.recentlyAdded, .name, .trending, .hot, .mostViewed, .mostLiked]
 }
 
 /// Selects which set of videos the home grid fetches from `GET /api/v1/videos`.
@@ -65,12 +71,21 @@ final class HomeViewModel: ObservableObject {
     @Published var scope: String
     @Published private(set) var fediverseLanguageIds: [String] = []
     @Published private(set) var categoryMenuItems: [VideoCategoryMenuItem] = []
-    @Published private(set) var selectedCategoryIds: [Int] = []
+    /// Languages for the Filters sheet: the widely used ones first (`FediverseHotLanguage` order),
+    /// then the rest of the server's list alphabetically.
+    @Published private(set) var commonLanguageMenuItems: [VideoLanguageMenuItem] = []
+    @Published private(set) var otherLanguageMenuItems: [VideoLanguageMenuItem] = []
+    @Published private(set) var filters = HomeVideoFilters()
 
     private static let sortDefaultsKey = "PeerTV.homeVideoSort"
     private static let scopeDefaultsKey = "PeerTV.homeVideoScope"
 
     private let pageSize = 15
+    /// With a language filter the server's pages are thinned client-side (see
+    /// `matchesLanguageFilter`), so ask for bigger ones and fetch several per load.
+    private let languageFilterPageSize = 50
+    private let languageFilterMaxPagesPerLoad = 4
+    /// Rows consumed from the server so far (not rows on screen: a language filter drops some).
     private var currentStart = 0
     private var total: Int?
     private var apiClient: PeerTubeAPIClient?
@@ -97,15 +112,20 @@ final class HomeViewModel: ObservableObject {
             scope = HomeVideoScope.all.rawValue
         }
         fediverseLanguageIds = FediverseHotLanguage.loadSavedCodes()
-        selectedCategoryIds = HomeVideoCategoryFilter.loadSavedIds()
+        filters = HomeVideoFilters(
+            categoryIds: Set(HomeVideoCategoryFilter.loadSavedIds()),
+            languageIds: Set(HomeVideoLanguageFilter.loadSavedIds()),
+            includeSubtitled: HomeVideoLanguageFilter.loadIncludeSubtitled(),
+            live: HomeLiveFilter.loadSaved()
+        )
     }
 
     var fediverseLanguageButtonTitle: String {
         fediverseLanguageIds.isEmpty ? "Languages" : "Languages (\(fediverseLanguageIds.count))"
     }
 
-    var categoryButtonTitle: String {
-        selectedCategoryIds.isEmpty ? "Categories" : "Categories (\(selectedCategoryIds.count))"
+    var filtersButtonTitle: String {
+        filters.isEmpty ? "Filters" : "Filters (\(filters.activeCount))"
     }
 
     var currentListSort: HomeVideoListSort {
@@ -120,8 +140,21 @@ final class HomeViewModel: ObservableObject {
         currentListScope != .fediverseTrending
     }
 
-    var showsCategoryControls: Bool {
+    var showsFilterControls: Bool {
         currentListScope != .fediverseTrending
+    }
+
+    /// True once the current list has loaded and come back empty, so the grid can say why
+    /// instead of showing nothing. False while loading, after an error, and before the first load.
+    var isEmptyAfterLoad: Bool {
+        guard videos.isEmpty, !isLoading, errorMessage == nil else { return false }
+        return currentListScope == .fediverseTrending ? fediverseHotLoaded : total != nil
+    }
+
+    /// The selected Fediverse languages by name, for the empty state ("Spanish and Arabic").
+    var fediverseLanguageNames: String {
+        let names = fediverseLanguageIds.compactMap { FediverseHotLanguage(rawValue: $0)?.displayName }
+        return ListFormatter.localizedString(byJoining: names)
     }
 
     func configure(apiClient: PeerTubeAPIClient, isAuthenticated: Bool, includeAllPrivacy: Bool) {
@@ -183,8 +216,8 @@ final class HomeViewModel: ObservableObject {
         guard let apiClient else { return }
         isLoading = true
         defer { if generation == loadGeneration { isLoading = false } }
-        // Refetch as many rows as are already loaded (API max 100) so a deep scroll position still exists.
-        let count = min(max(pageSize, videos.count), 100)
+        // Refetch as many rows as were consumed (API max 100) so a deep scroll position still exists.
+        let count = min(max(pageSize, currentStart), 100)
         do {
             let response: PaginatedResponse<Video> = try await apiClient.request(
                 .videos(
@@ -193,12 +226,14 @@ final class HomeViewModel: ObservableObject {
                     count: count,
                     includeAllPrivacy: includeAllPrivacy,
                     isLocal: currentListScope.isLocal,
-                    categoryIds: selectedCategoryIds
+                    categoryIds: filters.categoryIds.sorted(),
+                    languageIds: filters.languageIds.sorted(),
+                    isLive: filters.live.isLive
                 )
             )
             guard generation == loadGeneration else { return }
             var seen = Set<String>()
-            videos = response.items.filter { seen.insert($0.stableId).inserted }
+            videos = response.items.filter { seen.insert($0.stableId).inserted && matchesLanguageFilter($0) }
             total = response.total
             currentStart = response.items.count
             errorMessage = nil
@@ -232,23 +267,35 @@ final class HomeViewModel: ObservableObject {
         defer { if generation == loadGeneration { isLoading = false } }
 
         do {
-            // Normal users: omit broad filters (many instances 401). Admin/moderator: may use all privacies per API.
-            let response: PaginatedResponse<Video> = try await apiClient.request(
-                .videos(
-                    sort: sort,
-                    start: currentStart,
-                    count: pageSize,
-                    includeAllPrivacy: includeAllPrivacy,
-                    isLocal: currentListScope.isLocal,
-                    categoryIds: selectedCategoryIds
+            // A spoken-language filter thins each page client-side, so keep fetching until a
+            // page's worth is on screen or the list ends; otherwise one request is enough.
+            let thinsPages = !filters.languageIds.isEmpty && !filters.includeSubtitled
+            var added = 0
+            var pagesFetched = 0
+            repeat {
+                // Normal users: omit broad filters (many instances 401). Admin/moderator: may use all privacies per API.
+                let response: PaginatedResponse<Video> = try await apiClient.request(
+                    .videos(
+                        sort: sort,
+                        start: currentStart,
+                        count: thinsPages ? languageFilterPageSize : pageSize,
+                        includeAllPrivacy: includeAllPrivacy,
+                        isLocal: currentListScope.isLocal,
+                        categoryIds: filters.categoryIds.sorted(),
+                        languageIds: filters.languageIds.sorted(),
+                        isLive: filters.live.isLive
+                    )
                 )
-            )
-            guard generation == loadGeneration else { return }
-            total = response.total
-            let existingIds = Set(videos.map(\.stableId))
-            let unique = response.items.filter { !existingIds.contains($0.stableId) }
-            videos.append(contentsOf: unique)
-            currentStart += response.items.count
+                guard generation == loadGeneration else { return }
+                total = response.total
+                let existingIds = Set(videos.map(\.stableId))
+                let unique = response.items.filter { !existingIds.contains($0.stableId) && matchesLanguageFilter($0) }
+                videos.append(contentsOf: unique)
+                currentStart += response.items.count
+                added += unique.count
+                pagesFetched += 1
+                if response.items.isEmpty { break }
+            } while thinsPages && added < pageSize && canLoadMore && pagesFetched < languageFilterMaxPagesPerLoad
         } catch {
             guard generation == loadGeneration else { return }
             Self.log.error("loadMore failed sort=\(self.sort, privacy: .public) authenticated=\(self.isAuthenticated) includeAllPrivacy=\(self.includeAllPrivacy) start=\(self.currentStart) error=\(error.localizedDescription, privacy: .public) underlying=\(String(describing: error), privacy: .public)")
@@ -272,40 +319,106 @@ final class HomeViewModel: ObservableObject {
         await loadInitial()
     }
 
-    func refreshCategoryMenuItems() async {
+    /// Loads the server's category and language lists for the Filters sheet, and drops saved
+    /// selections the server no longer offers.
+    func refreshFilterMenuItems() async {
         guard let apiClient else { return }
+        async let categoriesResult = Self.fetchCategoryMenuItems(apiClient: apiClient)
+        async let languagesResult = Self.fetchLanguageMenuItems(apiClient: apiClient)
+
+        var pruned = filters
+        if let categories = await categoriesResult {
+            categoryMenuItems = categories
+            pruned.categoryIds = filters.categoryIds.intersection(categories.map(\.id))
+        } else {
+            categoryMenuItems = []
+        }
+        if let languages = await languagesResult {
+            (commonLanguageMenuItems, otherLanguageMenuItems) = Self.splitLanguages(languages)
+            pruned.languageIds = filters.languageIds.intersection(languages.map(\.id) + [VideoLanguageMenuItem.unspecified.id])
+        } else {
+            // No server list: the widely used languages are still worth offering.
+            commonLanguageMenuItems = FediverseHotLanguage.allInOrder.map {
+                VideoLanguageMenuItem(id: $0.rawValue, label: $0.displayName)
+            } + [.unspecified]
+            otherLanguageMenuItems = []
+        }
+        if pruned != filters {
+            filters = pruned
+            saveFilters()
+        }
+    }
+
+    /// PeerTube's `languageOneOf` also returns videos that merely have *subtitles* in a selected
+    /// language, so "Italian" brings back English videos with Italian captions. Unless the
+    /// filters ask for those, keep only videos whose own language is selected; "Not specified"
+    /// keeps the ones with none.
+    func matchesLanguageFilter(_ video: Video) -> Bool {
+        let selected = filters.languageIds
+        guard !selected.isEmpty, !filters.includeSubtitled else { return true }
+        guard let languageId = video.languageId else {
+            return selected.contains(VideoLanguageMenuItem.unspecified.id)
+        }
+        return selected.contains(languageId)
+    }
+
+    /// Replaces the filters, and reloads the grid when a different set of videos results.
+    func applyFilters(_ newFilters: HomeVideoFilters) async {
+        guard newFilters != filters else { return }
+        let sameVideos = newFilters.selectsSameVideos(as: filters)
+        filters = newFilters
+        saveFilters()
+        guard !sameVideos, currentListScope != .fediverseTrending else { return }
+        await loadInitial()
+    }
+
+    private func saveFilters() {
+        HomeVideoCategoryFilter.saveIds(filters.categoryIds.sorted())
+        HomeVideoLanguageFilter.saveIds(filters.languageIds.sorted())
+        HomeVideoLanguageFilter.saveIncludeSubtitled(filters.includeSubtitled)
+        HomeLiveFilter.save(filters.live)
+    }
+
+    private static func fetchCategoryMenuItems(apiClient: PeerTubeAPIClient) async -> [VideoCategoryMenuItem]? {
         do {
             let dict: [String: String] = try await apiClient.request(.videoCategories)
-            let items: [VideoCategoryMenuItem] = dict.compactMap { key, label in
+            return dict.compactMap { key, label in
                 guard let id = Int(key) else { return nil }
                 let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
                 let title = trimmed.isEmpty ? "Category \(id)" : trimmed
                 return VideoCategoryMenuItem(id: id, label: title)
             }.sorted { $0.id < $1.id }
-            categoryMenuItems = items
-            let availableIds = items.map(\.id)
-            let filtered = HomeVideoCategoryFilter.orderedIds(
-                from: Set(selectedCategoryIds),
-                availableIds: availableIds
-            )
-            if filtered != selectedCategoryIds {
-                selectedCategoryIds = filtered
-                HomeVideoCategoryFilter.saveIds(filtered)
-            }
         } catch {
-            Self.log.notice("refreshCategoryMenuItems failed: \(error.localizedDescription, privacy: .public)")
-            categoryMenuItems = []
+            log.notice("fetchCategoryMenuItems failed: \(error.localizedDescription, privacy: .public)")
+            return nil
         }
     }
 
-    func applyCategories(_ selection: Set<Int>) async {
-        let availableIds = categoryMenuItems.map(\.id)
-        let ordered = HomeVideoCategoryFilter.orderedIds(from: selection, availableIds: availableIds)
-        guard ordered != selectedCategoryIds else { return }
-        selectedCategoryIds = ordered
-        HomeVideoCategoryFilter.saveIds(ordered)
-        guard currentListScope != .fediverseTrending else { return }
-        await loadInitial()
+    private static func fetchLanguageMenuItems(apiClient: PeerTubeAPIClient) async -> [VideoLanguageMenuItem]? {
+        do {
+            let dict: [String: String] = try await apiClient.request(.videoLanguages)
+            return dict.compactMap { key, label in
+                let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !key.isEmpty, !trimmed.isEmpty else { return nil }
+                return VideoLanguageMenuItem(id: key, label: trimmed)
+            }
+        } catch {
+            log.notice("fetchLanguageMenuItems failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Widely used languages first, in `FediverseHotLanguage` order, then "Not specified" (the
+    /// server's list never includes it), then the rest by name.
+    private static func splitLanguages(_ languages: [VideoLanguageMenuItem]) -> (common: [VideoLanguageMenuItem], other: [VideoLanguageMenuItem]) {
+        let byId = Dictionary(languages.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let commonIds = FediverseHotLanguage.allInOrder.map(\.rawValue)
+        let common = commonIds.compactMap { byId[$0] } + [.unspecified]
+        let commonSet = Set(commonIds + [VideoLanguageMenuItem.unspecified.id])
+        let other = languages
+            .filter { !commonSet.contains($0.id) }
+            .sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+        return (common, other)
     }
 
     func applyListScope(_ option: HomeVideoScope) async {

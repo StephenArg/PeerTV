@@ -10,6 +10,10 @@ struct VideoDetailView: View {
     @State private var showDebugJSON = false
     @State private var showPlaylistPicker = false
     @State private var descriptionExpanded = false
+    /// Heights of the 5-line description and of its full text; the pills wait for Show More
+    /// only when the text is actually cut off.
+    @State private var descriptionShownHeight: CGFloat = 0
+    @State private var descriptionFullHeight: CGFloat = 0
     @State private var savedPosition: TimeInterval?
     @State private var showAnonymousRestriction = false
     @State private var deletionGrant: VideoDeletionGrant?
@@ -185,6 +189,24 @@ struct VideoDetailView: View {
                                             .lineLimit(descriptionExpanded ? nil : 5)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                             .fixedSize(horizontal: false, vertical: true)
+                                            .background(
+                                                // Same text at full height, hidden: taller than the
+                                                // 5-line version means Show More has something to reveal.
+                                                Text(desc)
+                                                    .font(.body)
+                                                    .multilineTextAlignment(.leading)
+                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                                    .hidden()
+                                                    .background(heightReader(DescriptionFullHeightKey.self))
+                                            )
+                                            .background(heightReader(DescriptionShownHeightKey.self))
+
+                                        // Long descriptions keep the pills for the expanded view, so
+                                        // the collapsed card stays five lines tall.
+                                        if !vm.detailPills.isEmpty, descriptionExpanded || !descriptionIsTruncated {
+                                            VideoDetailPillsRow(pills: vm.detailPills)
+                                        }
 
                                         Text(descriptionExpanded ? "Show Less" : "Show More")
                                             .font(.caption)
@@ -196,6 +218,11 @@ struct VideoDetailView: View {
                                 }
                                 .buttonStyle(.card)
                                 .accessibilityHint(descriptionExpanded ? "Collapses the description" : "Expands the full description")
+                                .onPreferenceChange(DescriptionShownHeightKey.self) { descriptionShownHeight = $0 }
+                                .onPreferenceChange(DescriptionFullHeightKey.self) { descriptionFullHeight = $0 }
+                            } else if !vm.detailPills.isEmpty {
+                                VideoDetailPillsRow(pills: vm.detailPills)
+                                    .padding(.horizontal, 8)
                             }
 
                             if (DebugFlags.showAPIExplorer && DebugFlags.showVideoDetailRawJSON)
@@ -585,6 +612,95 @@ struct VideoDetailView: View {
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// True while the collapsed description hides some of its text.
+    private var descriptionIsTruncated: Bool {
+        descriptionFullHeight > descriptionShownHeight + 1
+    }
+
+    private func heightReader<Key: PreferenceKey>(_ key: Key.Type) -> some View where Key.Value == CGFloat {
+        GeometryReader { geo in
+            Color.clear.preference(key: key, value: geo.size.height)
+        }
+    }
+}
+
+private struct DescriptionShownHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct DescriptionFullHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+// MARK: - Language and tag pills
+
+/// Language, subtitle and tag pills, wrapping onto as many lines as they need.
+struct VideoDetailPillsRow: View {
+    let pills: [VideoDetailPill]
+
+    var body: some View {
+        PillFlowLayout(spacing: 12) {
+            ForEach(pills) { pill in
+                HStack(spacing: 8) {
+                    if let systemImage = pill.systemImage {
+                        Image(systemName: systemImage)
+                    }
+                    Text(pill.title)
+                        .lineLimit(1)
+                }
+                .font(.caption2)
+                .foregroundStyle(pill.kind == .tag ? .tertiary : .secondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(.quaternary, in: Capsule())
+                .accessibilityLabel(pill.accessibilityLabel)
+            }
+        }
+    }
+}
+
+/// Lays out its children left to right, starting a new line when the next one wouldn't fit.
+struct PillFlowLayout: Layout {
+    var spacing: CGFloat = 12
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        return arrange(subviews: subviews, in: width).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let arrangement = arrange(subviews: subviews, in: bounds.width)
+        for (subview, origin) in zip(subviews, arrangement.origins) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func arrange(subviews: Subviews, in width: CGFloat) -> (size: CGSize, origins: [CGPoint]) {
+        var origins: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        var maxX: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            origins.append(CGPoint(x: x, y: y))
+            lineHeight = max(lineHeight, size.height)
+            x += size.width + spacing
+            maxX = max(maxX, x - spacing)
+        }
+        return (CGSize(width: maxX, height: y + lineHeight), origins)
     }
 }
 

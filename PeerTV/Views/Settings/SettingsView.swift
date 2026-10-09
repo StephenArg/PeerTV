@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var session: SessionStore
     @EnvironmentObject var appThemeStore: AppThemeStore
+    @EnvironmentObject private var downloadManager: DownloadManager
     @State private var shuffleEnabled = DebugFlags.shuffleTabEnabled
     @State private var showVideoDetailRawJSON = DebugFlags.showVideoDetailRawJSON
     @State private var accountPendingSignOut: UUID?
@@ -68,7 +69,9 @@ struct SettingsView: View {
                             HStack {
                                 Text("Downloaded Videos")
                                 Spacer()
-                                Text("\(DownloadManager.shared.downloadedVideos.count) videos")
+                                Text(downloadManager.downloadedVideos.isEmpty
+                                     ? "None"
+                                     : downloadManager.downloadedVideos.storageSummary)
                                     .foregroundStyle(.secondary)
                                 Image(systemName: "chevron.right")
                                     .foregroundStyle(.secondary)
