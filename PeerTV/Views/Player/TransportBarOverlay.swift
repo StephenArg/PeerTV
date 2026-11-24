@@ -27,7 +27,8 @@ private enum TransportBarMetrics {
     static let buttonRowSpacing: CGFloat = 14
     static let titleSpacing: CGFloat = 12
     static let autoHideDelay: TimeInterval = 5
-    static let skipSeconds: Double = 10
+    /// Within this many seconds of the live edge a stream counts as "live" rather than behind.
+    static let liveEdgeToleranceSeconds: TimeInterval = 12
     /// Press duration that separates a "tap" (skip) from a "hold" (enter skim mode).
     static let holdBeforeSkim: TimeInterval = 0.5
     /// Press duration that qualifies a touchpad click (`.select`) as a "hold" (toggles
@@ -655,6 +656,8 @@ final class TransportBarOverlayView: UIView {
     let chaptersButton: UIButton
     let pictureInPictureButton: UIButton
     let addToPlaylistButton: UIButton
+    let infoButton: UIButton
+    let sleepTimerButton: UIButton
     let currentTimeLabel = UILabel()
     let remainingTimeLabel = UILabel()
     /// Small icon next to the elapsed-time label showing play/pause state or skim direction + stage.
@@ -696,6 +699,18 @@ final class TransportBarOverlayView: UIView {
         didSet { addToPlaylistButton.isHidden = !showsAddToPlaylistButton }
     }
 
+    /// Info panel: title, channel, description, likes and chapters without leaving playback.
+    var showsInfoButton: Bool = false {
+        didSet { infoButton.isHidden = !showsInfoButton }
+    }
+
+    var showsSleepTimerButton: Bool = false {
+        didSet { sleepTimerButton.isHidden = !showsSleepTimerButton }
+    }
+
+    /// Live streams show a LIVE marker where the elapsed and remaining times normally go.
+    private(set) var isLiveLayout = false
+
     /// Fades the visible chrome (scrim / title / buttons / time labels / track fill) but keeps the
     /// scrubber UIControl itself at `alpha = 1` so the focus engine continues to route remote input
     /// to it while the bar is "hidden". First press while hidden wakes the bar; second press acts.
@@ -732,6 +747,8 @@ final class TransportBarOverlayView: UIView {
         self.chaptersButton = Self.makeIconButton(symbol: "list.bullet.rectangle")
         self.pictureInPictureButton = Self.makeIconButton(symbol: "pip.enter")
         self.addToPlaylistButton = Self.makeIconButton(symbol: "text.badge.plus")
+        self.infoButton = Self.makeIconButton(symbol: "info.circle")
+        self.sleepTimerButton = Self.makeIconButton(symbol: "moon.zzz")
         super.init(frame: frame)
         setup()
     }
@@ -778,6 +795,12 @@ final class TransportBarOverlayView: UIView {
         buttonStack.addArrangedSubview(chaptersButton)
         buttonStack.addArrangedSubview(pictureInPictureButton)
         buttonStack.addArrangedSubview(addToPlaylistButton)
+        buttonStack.addArrangedSubview(sleepTimerButton)
+        buttonStack.addArrangedSubview(infoButton)
+        infoButton.isHidden = true
+        infoButton.accessibilityLabel = "Info"
+        sleepTimerButton.isHidden = true
+        sleepTimerButton.accessibilityLabel = "Sleep timer"
         skipNextButton.isHidden = true
         skipNextButton.accessibilityLabel = "Play next in playlist"
         captionsButton.isHidden = true
@@ -878,6 +901,8 @@ final class TransportBarOverlayView: UIView {
     }
 
     func updateLabels(current: TimeInterval, duration: TimeInterval) {
+        isLiveLayout = false
+        currentTimeLabel.textColor = .white
         currentTimeLabel.text = Self.fmt(current)
         if duration.isFinite, duration > 0 {
             remainingTimeLabel.text = "-" + Self.fmt(max(0, duration - current))
@@ -886,30 +911,68 @@ final class TransportBarOverlayView: UIView {
         }
     }
 
-    func updateDownloadSpeedDisplay(_ display: DownloadThroughputDisplay) {
+    /// Live stream: the left label reads LIVE at the edge, or how far behind it playback is;
+    /// the right label is the live edge of the DVR window.
+    func updateLiveLabels(behindLive: TimeInterval, atLiveEdge: Bool) {
+        isLiveLayout = true
+        if atLiveEdge {
+            currentTimeLabel.textColor = UIColor(red: 1, green: 0.27, blue: 0.23, alpha: 1)
+            currentTimeLabel.text = "● LIVE"
+        } else {
+            currentTimeLabel.textColor = .white
+            currentTimeLabel.text = "-" + Self.fmt(max(0, behindLive))
+        }
+        remainingTimeLabel.text = "LIVE"
+    }
+
+    /// `detail` (resolution and bitrate) is appended when the Playback stats setting asks for it;
+    /// `nil` text hides the readout entirely.
+    func updateDownloadSpeedDisplay(_ display: DownloadThroughputDisplay?, detail: String? = nil) {
+        guard let display else {
+            downloadSpeedLabel.isHidden = true
+            downloadSpeedLabel.text = ""
+            return
+        }
         downloadSpeedLabel.isHidden = false
+        var text: String
         switch display {
         case .idle:
-            downloadSpeedLabel.text = ""
+            text = ""
             downloadSpeedLabel.textColor = UIColor.white.withAlphaComponent(0.72)
         case .buffering(let speed):
             downloadSpeedLabel.textColor = UIColor.white.withAlphaComponent(0.72)
             if let speed, speed >= TransportBarMetrics.throughputIdleBytesPerSecond {
-                downloadSpeedLabel.text = "buffering · \(Self.fmtSpeed(speed))"
+                text = "buffering · \(Self.fmtSpeed(speed))"
             } else {
-                downloadSpeedLabel.text = "buffering"
+                text = "buffering"
             }
         case .steady(let speed):
             downloadSpeedLabel.textColor = UIColor.white.withAlphaComponent(0.55)
             if let speed, speed >= TransportBarMetrics.throughputIdleBytesPerSecond {
-                downloadSpeedLabel.text = "\(Self.fmtSpeed(speed)) · steady"
+                text = "\(Self.fmtSpeed(speed)) · steady"
             } else {
-                downloadSpeedLabel.text = "steady"
+                text = "steady"
             }
         case .downloading(let speed):
             downloadSpeedLabel.textColor = UIColor.white.withAlphaComponent(0.72)
-            downloadSpeedLabel.text = Self.fmtSpeed(speed)
+            text = Self.fmtSpeed(speed)
         }
+        if let detail, !detail.isEmpty {
+            text = text.isEmpty ? detail : "\(text) · \(detail)"
+        }
+        downloadSpeedLabel.text = text
+    }
+
+    /// "1080p · 5.8 Mbps" for the detailed stats readout.
+    static func fmtStreamDetail(height: Int?, bitrate: Double?) -> String {
+        var parts: [String] = []
+        if let height, height > 0 { parts.append("\(height)p") }
+        if let bitrate, bitrate > 0 {
+            parts.append(bitrate >= 1_000_000
+                ? String(format: "%.1f Mbps", bitrate / 1_000_000)
+                : String(format: "%.0f kbps", bitrate / 1_000))
+        }
+        return parts.joined(separator: " · ")
     }
 
     private static func fmtSpeed(_ bytesPerSecond: Double) -> String {
@@ -1481,6 +1544,14 @@ final class TransportBarController: NSObject {
     private let onPictureInPictureTapped: (() -> Void)?
     private let onSkipNextTapped: (() -> Void)?
     private let onAddToPlaylistTapped: (() -> Void)?
+    private let onInfoTapped: (() -> Void)?
+    private let onSleepTimerTapped: (() -> Void)?
+    /// Fired on every remote input the bar handles (presses, swipes, button taps), so the
+    /// coordinator can tell an attended session from one left running.
+    var onUserInput: (() -> Void)?
+    /// Live stream: no skimming or scrubbing; the scrubber shows the seekable (DVR) window, a
+    /// right tap jumps back to the live edge and the labels read LIVE.
+    private(set) var isLiveStream = false
     /// Invoked when the touchpad click (`.select`) is held past `holdBeforeSpeedToggle`.
     /// The coordinator owns `currentSpeed` (so it can reapply on resolution swaps), so the
     /// actual 2x / 1x toggle lives there — this controller just detects the gesture and
@@ -1538,6 +1609,8 @@ final class TransportBarController: NSObject {
         onPictureInPictureTapped: (() -> Void)? = nil,
         onSkipNextTapped: (() -> Void)? = nil,
         onAddToPlaylistTapped: (() -> Void)? = nil,
+        onInfoTapped: (() -> Void)? = nil,
+        onSleepTimerTapped: (() -> Void)? = nil,
         onSpeedHold: (() -> Void)? = nil,
         onTouchHoldBegan: (() -> Void)? = nil,
         onTouchHoldEnded: (() -> Void)? = nil
@@ -1551,6 +1624,8 @@ final class TransportBarController: NSObject {
         self.onPictureInPictureTapped = onPictureInPictureTapped
         self.onSkipNextTapped = onSkipNextTapped
         self.onAddToPlaylistTapped = onAddToPlaylistTapped
+        self.onInfoTapped = onInfoTapped
+        self.onSleepTimerTapped = onSleepTimerTapped
         self.onSpeedHold = onSpeedHold
         self.onTouchHoldBegan = onTouchHoldBegan
         self.onTouchHoldEnded = onTouchHoldEnded
@@ -1568,6 +1643,10 @@ final class TransportBarController: NSObject {
         rootView.barView.pictureInPictureButton.addTarget(self, action: #selector(pictureInPicturePressed), for: .primaryActionTriggered)
         rootView.barView.skipNextButton.addTarget(self, action: #selector(skipNextPressed), for: .primaryActionTriggered)
         rootView.barView.addToPlaylistButton.addTarget(self, action: #selector(addToPlaylistPressed), for: .primaryActionTriggered)
+        rootView.barView.infoButton.addTarget(self, action: #selector(infoPressed), for: .primaryActionTriggered)
+        rootView.barView.sleepTimerButton.addTarget(self, action: #selector(sleepTimerPressed), for: .primaryActionTriggered)
+        rootView.barView.showsInfoButton = onInfoTapped != nil
+        rootView.barView.showsSleepTimerButton = onSleepTimerTapped != nil
 
         rootView.barView.trackControl.onArrowPressBegan = { [weak self] d in self?.handleArrowPressBegan(direction: d) }
         rootView.barView.trackControl.onArrowPressEnded = { [weak self] d in self?.handleArrowPressEnded(direction: d) }
@@ -1611,6 +1690,28 @@ final class TransportBarController: NSObject {
         rootView.barView.showsAddToPlaylistButton = show
     }
 
+    /// Switches the bar between video and live-stream behaviour (see `isLiveStream`).
+    func setLiveStream(_ live: Bool) {
+        isLiveStream = live
+        if live {
+            pendingScrubCommit = false
+            rootView.barView.trackControl.isScrubbing = false
+            rootView.barView.trackControl.scrubPreviewTime = nil
+            hideThumbnailPreview()
+        }
+        updateFromPlayer()
+    }
+
+    /// Resumes playback when paused. Used by the "Still watching?" prompt's Continue action.
+    func resumeIfPaused() {
+        guard let player, player.timeControlStatus == .paused else { return }
+        resumePlayback(forceImmediate: hasAdequateBufferAhead())
+    }
+
+    private func userDidInteract() {
+        onUserInput?()
+    }
+
     /// Pauses playback (keeping the play/pause indicator in sync) when the player is currently
     /// advancing. Used so presenting the add-to-playlist picker doesn't leave the video playing
     /// behind the action sheet.
@@ -1631,6 +1732,7 @@ final class TransportBarController: NSObject {
     /// `playerViewControllerShouldDismiss` — both may fire for the same press on tvOS because
     /// AVKit runs its own internal `.menu` gesture recognizer outside the responder chain.
     func handleMenuPressIfNeeded() -> Bool {
+        userDidInteract()
         if rootView.isQuickOptionsVisible {
             hideQuickOptions()
             menuConsumedAt = Date()
@@ -1660,6 +1762,7 @@ final class TransportBarController: NSObject {
             return
         }
         lastPlayPauseHandlingAt = now
+        userDidInteract()
 
         if rootView.isQuickOptionsVisible {
             hideQuickOptions()
@@ -1722,6 +1825,18 @@ final class TransportBarController: NSObject {
                 self?.onAddToPlaylistTapped?()
             })
         }
+        if bar.showsSleepTimerButton {
+            items.append(.init(symbol: "moon.zzz", accessibilityLabel: "Sleep timer") { [weak self] in
+                self?.hideQuickOptions()
+                self?.onSleepTimerTapped?()
+            })
+        }
+        if bar.showsInfoButton {
+            items.append(.init(symbol: "info.circle", accessibilityLabel: "Info") { [weak self] in
+                self?.hideQuickOptions()
+                self?.onInfoTapped?()
+            })
+        }
         rootView.quickOptionsView.setItems(items)
         rootView.setNeedsLayout()
         rootView.layoutIfNeeded()
@@ -1747,6 +1862,7 @@ final class TransportBarController: NSObject {
     /// entirely so those modes only respond to the tap — the user can get out of skim /
     /// scrub via a quick click and never accidentally toggle speed.
     func handleSelectPressBegan() {
+        userDidInteract()
         selectHoldWorkItem?.cancel()
         selectHoldDidFire = false
 
@@ -1954,10 +2070,8 @@ final class TransportBarController: NSObject {
             onTimeUpdate?(0)
             return
         }
-        if player.currentItem?.duration.isIndefinite == true {
-            // Live streams — the bar is hidden elsewhere; keep the indicator hidden too.
-            rootView.barView.stateIndicator.isHidden = true
-            onTimeUpdate?(0)
+        if isLiveStream || player.currentItem?.duration.isIndefinite == true {
+            updateFromLivePlayer(player)
             return
         }
 
@@ -2006,6 +2120,61 @@ final class TransportBarController: NSObject {
             captionTime = cur
         }
         onTimeUpdate?(captionTime)
+    }
+
+    /// Live: the scrubber spans the seekable (DVR) window, so the fill is how far into that
+    /// window playback is, and the labels say LIVE or how far behind the edge it is.
+    private func updateFromLivePlayer(_ player: AVPlayer) {
+        let bar = rootView.barView
+        let track = bar.trackControl
+        let window = Self.seekableWindow(of: player.currentItem)
+        let t = CMTimeGetSeconds(player.currentTime())
+        let cur = t.isFinite ? t : 0
+
+        if let window {
+            let length = max(0, window.end - window.start)
+            track.duration = length
+            track.currentTime = min(max(0, cur - window.start), length)
+            track.bufferedTime = length
+            let behind = max(0, window.end - cur)
+            bar.updateLiveLabels(behindLive: behind, atLiveEdge: behind <= TransportBarMetrics.liveEdgeToleranceSeconds)
+        } else {
+            track.duration = 0
+            track.currentTime = 0
+            track.bufferedTime = 0
+            bar.updateLiveLabels(behindLive: 0, atLiveEdge: true)
+        }
+        updateDownloadThroughput()
+        tryResumeIfStalled()
+        if bar.stateIndicator.isHidden {
+            bar.stateIndicator.isHidden = false
+            updateIndicator()
+        }
+        onTimeUpdate?(cur)
+    }
+
+    /// Start and end of the stream's seekable range (the HLS DVR window), if the player knows it yet.
+    private static func seekableWindow(of item: AVPlayerItem?) -> (start: TimeInterval, end: TimeInterval)? {
+        guard let item else { return nil }
+        var start = TimeInterval.infinity
+        var end: TimeInterval = 0
+        for value in item.seekableTimeRanges {
+            let range = value.timeRangeValue
+            let s = CMTimeGetSeconds(range.start)
+            let e = CMTimeGetSeconds(CMTimeRangeGetEnd(range))
+            guard s.isFinite, e.isFinite else { continue }
+            start = min(start, s)
+            end = max(end, e)
+        }
+        guard start.isFinite, end > start else { return nil }
+        return (start, end)
+    }
+
+    /// Jumps to the live edge of the DVR window.
+    private func seekToLiveEdge() {
+        guard let player, let window = Self.seekableWindow(of: player.currentItem) else { return }
+        player.seek(to: CMTime(seconds: window.end, preferredTimescale: 600), toleranceBefore: .positiveInfinity, toleranceAfter: .positiveInfinity)
+        showBarAndResetTimer()
     }
 
     private func updateBuffered() {
@@ -2148,14 +2317,34 @@ final class TransportBarController: NSObject {
             lastBufferedRangeEnd = cachedBufferedEnd
         }
 
+        let stats = PlayerSettings.playbackStats
+        guard stats != .off else {
+            rootView.barView.updateDownloadSpeedDisplay(nil)
+            return
+        }
+        let detail: String? = stats == .detailed
+            ? TransportBarOverlayView.fmtStreamDetail(
+                height: Int(item.presentationSize.height.rounded()),
+                bitrate: Self.indicatedBitrate(from: item)
+            )
+            : nil
         rootView.barView.updateDownloadSpeedDisplay(
             Self.throughputDisplay(
                 player: player,
                 bufferedEnd: cachedBufferedEnd,
                 smoothedSpeed: smoothedThroughput(),
                 lastPositiveTransferAt: lastPositiveThroughputAt
-            )
+            ),
+            detail: detail
         )
+    }
+
+    /// The bitrate of the variant being played, when the access log has one.
+    private static func indicatedBitrate(from item: AVPlayerItem) -> Double? {
+        guard let event = item.accessLog()?.events.last else { return nil }
+        if event.indicatedBitrate > 0 { return event.indicatedBitrate }
+        let mediaBitrate = event.averageVideoBitrate + event.averageAudioBitrate
+        return mediaBitrate > 0 ? mediaBitrate : nil
     }
 
     private func ingestThroughputSample(_ bytesPerSecond: Double?, at now: Date) {
@@ -2247,10 +2436,7 @@ final class TransportBarController: NSObject {
     }
 
     private func updateHiddenForLiveIfNeeded() {
-        guard let item = player?.currentItem else { return }
-        if item.duration.isIndefinite {
-            rootView.setBarVisible(false, animated: false)
-        }
+        // Live streams keep the bar (see `updateFromLivePlayer`); nothing to hide any more.
     }
 
     private static func seconds(_ t: CMTime) -> TimeInterval {
@@ -2345,6 +2531,8 @@ final class TransportBarController: NSObject {
             || rootView.barView.chaptersButton.isFocused
             || rootView.barView.pictureInPictureButton.isFocused
             || rootView.barView.addToPlaylistButton.isFocused
+            || rootView.barView.infoButton.isFocused
+            || rootView.barView.sleepTimerButton.isFocused
     }
 
     // MARK: - Actions (buttons / gestures / arrows)
@@ -2369,9 +2557,12 @@ final class TransportBarController: NSObject {
     }
 
     private func handleScrubberPan(translationX: CGFloat, ended: Bool) {
+        userDidInteract()
         // Skim mode consumes the bar; ignore incidental horizontal swipes until the user exits.
         if case .skimming = skimPhase { return }
         guard let player else { return }
+        // A live stream has no timeline to scrub; the bar just wakes.
+        if isLiveStream { showBarAndResetTimer(); return }
         // Visual scrub only happens while the video is paused. Touchpad swipes during playback
         // do nothing — the UI stays as it is so the user isn't accidentally seeking while watching.
         guard player.timeControlStatus == .paused else { return }
@@ -2428,8 +2619,16 @@ final class TransportBarController: NSObject {
     /// - If already skimming: the new press adjusts — same direction bumps to a faster stage,
     ///   opposite direction bumps to a slower stage (or flips direction at stage 1).
     private func handleArrowPressBegan(direction: Int) {
+        userDidInteract()
         skimHoldWorkItem?.cancel()
         skimHoldWorkItem = nil
+
+        if isLiveStream {
+            // No skim on live; a tap acts on release (`handleArrowPressEnded`).
+            skimPhase = .pressed(direction: direction, began: Date())
+            showBarAndResetTimer()
+            return
+        }
 
         if case .skimming(let curDir, let curStage) = skimPhase {
             var newDir = curDir
@@ -2474,7 +2673,12 @@ final class TransportBarController: NSObject {
             }
             showBarAndResetTimer()
             if wasVisible {
-                seekBy(seconds: Double(direction) * TransportBarMetrics.skipSeconds)
+                if isLiveStream {
+                    // Right returns to the live edge; left steps back through the DVR window.
+                    if direction > 0 { seekToLiveEdge() } else { seekBy(seconds: -PlayerSettings.skipInterval) }
+                } else {
+                    seekBy(seconds: Double(direction) * PlayerSettings.skipInterval)
+                }
             }
         case .skimming:
             // Release does NOT exit skim mode — only Play/Pause does.
@@ -2608,37 +2812,55 @@ final class TransportBarController: NSObject {
     }
 
     @objc private func qualityPressed() {
+        userDidInteract()
         onQualityTapped()
         showBarAndResetTimer()
     }
 
+    @objc private func infoPressed() {
+        userDidInteract()
+        onInfoTapped?()
+        showBarAndResetTimer()
+    }
+
+    @objc private func sleepTimerPressed() {
+        userDidInteract()
+        onSleepTimerTapped?()
+        showBarAndResetTimer()
+    }
+
     @objc private func speedPressed() {
+        userDidInteract()
         onSpeedTapped()
         showBarAndResetTimer()
     }
 
     @objc private func captionsPressed() {
+        userDidInteract()
         onCaptionsTapped?()
         showBarAndResetTimer()
     }
 
     @objc private func chaptersPressed() {
+        userDidInteract()
         onChaptersTapped?()
         showBarAndResetTimer()
     }
 
     @objc private func pictureInPicturePressed() {
-        print("[PiP] transport button pressed callback=\(onPictureInPictureTapped != nil)")
+        userDidInteract()
         onPictureInPictureTapped?()
         showBarAndResetTimer()
     }
 
     @objc private func skipNextPressed() {
+        userDidInteract()
         onSkipNextTapped?()
         showBarAndResetTimer()
     }
 
     @objc private func addToPlaylistPressed() {
+        userDidInteract()
         onAddToPlaylistTapped?()
         showBarAndResetTimer()
     }
@@ -2668,6 +2890,13 @@ final class TransportBarController: NSObject {
     /// chapter jumps; a jump replaces any in-progress skim or staged visual scrub.
     func seek(to seconds: TimeInterval) {
         guard let player else { return }
+        if isLiveStream {
+            guard let window = Self.seekableWindow(of: player.currentItem) else { return }
+            let target = min(max(window.start, seconds), window.end)
+            player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+            showBarAndResetTimer()
+            return
+        }
         let d: Double = {
             guard let item = player.currentItem else { return 0 }
             let s = CMTimeGetSeconds(item.duration)
@@ -2840,10 +3069,10 @@ final class TransportBarController: NSObject {
         registeredRemoteCommandTargets = true
         let c = MPRemoteCommandCenter.shared()
         c.skipForwardCommand.isEnabled = true
-        c.skipForwardCommand.preferredIntervals = [NSNumber(value: TransportBarMetrics.skipSeconds)]
+        c.skipForwardCommand.preferredIntervals = [NSNumber(value: PlayerSettings.skipInterval)]
         c.skipForwardCommand.addTarget(self, action: #selector(mpSkipForward))
         c.skipBackwardCommand.isEnabled = true
-        c.skipBackwardCommand.preferredIntervals = [NSNumber(value: TransportBarMetrics.skipSeconds)]
+        c.skipBackwardCommand.preferredIntervals = [NSNumber(value: PlayerSettings.skipInterval)]
         c.skipBackwardCommand.addTarget(self, action: #selector(mpSkipBackward))
         c.togglePlayPauseCommand.isEnabled = true
         c.togglePlayPauseCommand.addTarget(self, action: #selector(mpTogglePlayPause))
@@ -2865,10 +3094,13 @@ final class TransportBarController: NSObject {
     }
 
     @objc private func mpSkipForward(_ e: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
-        seekBy(seconds: TransportBarMetrics.skipSeconds); return .success
+        userDidInteract()
+        if isLiveStream { seekToLiveEdge() } else { seekBy(seconds: PlayerSettings.skipInterval) }
+        return .success
     }
     @objc private func mpSkipBackward(_ e: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
-        seekBy(seconds: -TransportBarMetrics.skipSeconds); return .success
+        userDidInteract()
+        seekBy(seconds: -PlayerSettings.skipInterval); return .success
     }
     @objc private func mpTogglePlayPause(_ e: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
         handlePlayPausePress()

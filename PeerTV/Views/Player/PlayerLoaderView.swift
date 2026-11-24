@@ -196,13 +196,21 @@ final class PlayerPresenter {
                     )
                 }
 
+                let isLive = video.isLive == true
+                if isLive, let message = Self.liveUnavailableMessage(for: video) {
+                    removeLoadingOverlay()
+                    isPresenting = false
+                    Self.presentPlaybackAlert(title: "Live stream", message: message)
+                    return
+                }
+
                 guard let url = video.hlsPlaylistURL ?? video.playbackURL else {
                     PlaybackLog.log.error("no playback URL videoId=\(videoId, privacy: .public) \(video.playbackSourceSummary, privacy: .public)")
                     removeLoadingOverlay()
                     isPresenting = false
                     Self.presentPlaybackAlert(
-                        title: "Couldn’t play video",
-                        message: "No streaming files were found for this video."
+                        title: isLive ? "Live stream" : "Couldn’t play video",
+                        message: isLive ? "This stream isn’t on air right now." : "No streaming files were found for this video."
                     )
                     return
                 }
@@ -247,7 +255,11 @@ final class PlayerPresenter {
                         video: video,
                         apiBaseURL: resolvedClient.baseURL,
                         preferredArtworkURL: historyTileThumbnailURL
-                    )
+                    ),
+                    video: video,
+                    // Federated rows: the Info panel refetches from the host that served the detail.
+                    originHost: apiHosts == nil ? nil : resolvedClient.baseURL?.host,
+                    isLive: isLive
                 )
             } catch {
                 PlaybackLog.log.error("videoDetail failed videoId=\(videoId, privacy: .public) \(error.localizedDescription, privacy: .public) \(String(describing: error), privacy: .public)")
@@ -264,6 +276,19 @@ final class PlayerPresenter {
     private static func describePlaybackURL(_ url: URL) -> String {
         PlaybackLog.describe(url: url)
     }
+
+    /// Why a live video can't be watched right now, or `nil` when it is on air.
+    static func liveUnavailableMessage(for video: Video) -> String? {
+        guard video.isLive == true else { return nil }
+        switch video.state?.id {
+        case VideoState.waitingForLive?: return "This stream hasn’t started yet. Try again once the channel goes live."
+        case VideoState.liveEnded?: return "This live stream has ended."
+        default: return nil
+        }
+    }
+
+    /// Set by the player's Info panel: the channel to open once the player has closed.
+    var pendingChannelToOpen: String?
 
     /// Private HLS needs `reinjectVideoFileToken`. Logged-in playback from object storage/CDN (cross-origin)
     /// needs `videoFileToken` on the query — same idea as `DownloadManager` for direct files — and must not
@@ -371,7 +396,10 @@ final class PlayerPresenter {
         accountId: UUID?,
         prefetchedCaptions: [PeerTubeCaption]? = nil,
         durationSeconds: Int? = nil,
-        nowPlaying: NowPlayingMetadata? = nil
+        nowPlaying: NowPlayingMetadata? = nil,
+        video: Video? = nil,
+        originHost: String? = nil,
+        isLive: Bool = false
     ) {
         guard let root = Self.keyWindow?.rootViewController else {
             PlaybackLog.log.error("presentPlayer: no root VC videoId=\(videoId, privacy: .public)")
@@ -385,7 +413,8 @@ final class PlayerPresenter {
         try? AVAudioSession.sharedInstance().setActive(true)
 
         let rawSaved: TimeInterval? = {
-            guard let accountId else { return nil }
+            // A live stream has no position to come back to.
+            guard let accountId, !isLive else { return nil }
             return PlaybackPositionStore.position(for: videoId, accountId: accountId)
         }()
         let resumeSeconds = PlaybackPositionStore.effectiveResumePosition(
@@ -413,7 +442,8 @@ final class PlayerPresenter {
                 completionHandler: nil
             )
             PlaybackLog.log.notice("pre-seeking to \(pos, privacy: .public)s before attach videoId=\(videoId, privacy: .public)")
-        } else {
+        } else if !isLive {
+            // Live keeps AVPlayer's own (small) buffer: there is nothing ahead to load.
             item.preferredForwardBufferDuration = PlayerSettings.bufferCap.preferredBufferSeconds(
                 bytesPerSecond: resolutions.bufferBytesPerSecond(forQualityLabel: initialLabel)
             )
@@ -448,7 +478,10 @@ final class PlayerPresenter {
             instanceBaseURL: apiClient.baseURL,
             accountId: accountId,
             prefetchedCaptions: prefetchedCaptions,
-            initialResumeAt: resumeSeconds
+            initialResumeAt: resumeSeconds,
+            video: video,
+            originHost: originHost,
+            isLive: isLive
         ) { [weak self] in
             self?.isPresenting = false
         }
@@ -640,6 +673,19 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     private var isSeekingToResumePoint = false
     private var resignActiveObserver: Any?
     private var lastPeriodicPositionSaveAt = Date.distantPast
+    /// Detail of the playing video, for the Info panel. `nil` for local downloads.
+    private var video: Video?
+    /// Federated origin of the playing video (fediverse trending), for the Info panel's fetch.
+    private var originHost: String?
+    private var isLive: Bool
+    /// Most recent remote input the transport bar saw. "Still watching?" fires when playback
+    /// has run this long without any.
+    private var lastUserInputAt = Date()
+    private var isStillWatchingPromptShowing = false
+    private var sleepTimer: Timer?
+    private var sleepTimerFiresAt: Date?
+    private var sleepTimerOption: SleepTimerOption = .off
+    private weak var infoPanelHost: UIViewController?
 
     private static let watchReportInterval: Double = 30
     /// Prefetch the next playlist item once this little playback time remains. Kept short
@@ -658,7 +704,13 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
          accountId: UUID?,
          prefetchedCaptions: [PeerTubeCaption]? = nil,
          initialResumeAt: TimeInterval? = nil,
+         video: Video? = nil,
+         originHost: String? = nil,
+         isLive: Bool = false,
          onDismiss: @escaping () -> Void) {
+        self.video = video
+        self.originHost = originHost
+        self.isLive = isLive
         self.resolutions = resolutions
         self.autoURL = autoURL
         self.currentLabel = initialLabel
@@ -709,10 +761,14 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             onPictureInPictureTapped: { [weak self] in self?.startPictureInPicture() },
             onSkipNextTapped: { [weak self] in self?.userRequestedSkipToNextPlaylistItem() },
             onAddToPlaylistTapped: { [weak self] in self?.presentAddToPlaylistMenu() },
+            onInfoTapped: apiClient == nil ? nil : { [weak self] in self?.presentInfoPanel() },
+            onSleepTimerTapped: { [weak self] in self?.presentSleepTimerMenu() },
             onSpeedHold: { [weak self] in self?.toggleSpeedHold() },
             onTouchHoldBegan: { [weak self] in self?.startTouchHoldBoost() },
             onTouchHoldEnded: { [weak self] in self?.endTouchHoldBoost() }
         )
+        transportBar?.onUserInput = { [weak self] in self?.lastUserInputAt = Date() }
+        transportBar?.setLiveStream(isLive)
         transportBar?.attach(player: player)
         transportBar?.preferredPlaybackRate = currentSpeed
         player.defaultRate = currentSpeed
@@ -969,14 +1025,14 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     /// a tap-pause-then-tap-play cycle. Using the live rate ensures "hold" always gets to 2x
     /// first from any actual playback rate other than 2x (including paused → resume at 2x).
     private func toggleSpeedHold() {
-        let fast: Float = 2.0
+        let fast = PlayerSettings.holdSpeed
         let currentRate = player?.rate ?? 1.0
         let newSpeed: Float = abs(currentRate - fast) < 0.001 ? 1.0 : fast
         currentSpeed = newSpeed
         player?.defaultRate = newSpeed
         player?.rate = newSpeed
         transportBar?.preferredPlaybackRate = newSpeed
-        transportBar?.showSpeedNotification("\(Int(newSpeed))x")
+        transportBar?.showSpeedNotification(newSpeed == 1.0 ? "1x" : PlayerSettings.speedLabel(newSpeed))
     }
 
     /// Fired when a finger rests on the Siri Remote touchpad past
@@ -991,7 +1047,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         guard rateBeforeTouchHoldBoost == nil else { return }
 
         rateBeforeTouchHoldBoost = player.rate
-        player.rate = 2.0
+        player.rate = PlayerSettings.holdSpeed
     }
 
     /// Fired on finger-lift or gesture cancellation after `startTouchHoldBoost`. Restores the
@@ -1243,6 +1299,11 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     private func handlePlaybackEnded() {
         reportCurrentTime()
         clearPlaybackPosition()
+        if sleepTimerOption == .endOfVideo {
+            // The sleep timer asked to stop here instead of playing on.
+            dismissPlayer()
+            return
+        }
         if let queue = playlistQueue,
            queue.autoplayEnabled,
            queue.currentIndex + 1 < queue.videoIds.count {
@@ -1284,6 +1345,9 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
 
             videoId = nextVideoId
             numericVideoId = video.id
+            self.video = video
+            isLive = video.isLive == true
+            transportBar?.setLiveStream(isLive)
             playlistQueue = nextQueue
             refreshSkipNextButtonVisibility()
             refreshAddToPlaylistButtonVisibility()
@@ -1453,7 +1517,149 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             self?.reportCurrentTime()
             self?.savePlaybackPositionMidPlayback(throttled: true)
             self?.prefetchNextPlaylistItemIfNeeded()
+            self?.promptStillWatchingIfNeeded()
         }
+    }
+
+    // MARK: Still watching?
+
+    /// Pauses and asks after `PlayerSettings.stillWatchingInterval` of playback with no remote
+    /// input. Runs from the progress observer, so paused time doesn't count. Skipped in Picture
+    /// in Picture, where there is nothing on screen to answer on.
+    private func promptStillWatchingIfNeeded() {
+        guard !isStillWatchingPromptShowing, !isSwitching, !isInPictureInPicture, !didCallDismiss else { return }
+        guard let limit = PlayerSettings.stillWatchingInterval.seconds else { return }
+        guard Date().timeIntervalSince(lastUserInputAt) >= limit else { return }
+        guard let vc = containerController ?? controller, vc.presentedViewController == nil else { return }
+
+        isStillWatchingPromptShowing = true
+        transportBar?.pauseIfPlaying()
+        let hours = limit / 3600
+        let elapsed = hours >= 1
+            ? (hours == hours.rounded() ? "\(Int(hours)) hour\(hours == 1 ? "" : "s")" : String(format: "%.1f hours", hours))
+            : "\(Int(limit / 60)) minutes"
+        let alert = UIAlertController(
+            title: "Still watching?",
+            message: "Playback paused after \(elapsed) without using the remote. You can change or turn this off in Settings.",
+            preferredStyle: .alert
+        )
+        let continueAction = UIAlertAction(title: "Continue Watching", style: .default) { [weak self] _ in
+            guard let self else { return }
+            self.isStillWatchingPromptShowing = false
+            self.lastUserInputAt = Date()
+            self.transportBar?.resumeIfPaused()
+        }
+        alert.addAction(continueAction)
+        alert.addAction(UIAlertAction(title: "Stop", style: .cancel) { [weak self] _ in
+            self?.isStillWatchingPromptShowing = false
+            self?.dismissPlayer()
+        })
+        alert.preferredAction = continueAction
+        vc.present(alert, animated: true)
+    }
+
+    // MARK: Sleep timer
+
+    private func presentSleepTimerMenu() {
+        guard let vc = containerController ?? controller else { return }
+        let title: String
+        if let firesAt = sleepTimerFiresAt {
+            let remaining = max(0, firesAt.timeIntervalSinceNow)
+            title = "Sleep timer · \(Self.minutesLabel(remaining)) left"
+        } else if sleepTimerOption == .endOfVideo {
+            title = "Sleep timer · stops when this video ends"
+        } else {
+            title = "Sleep timer"
+        }
+        let alert = UIAlertController(title: title, message: nil, preferredStyle: .actionSheet)
+        for option in SleepTimerOption.allCases {
+            let isCurrent = option == sleepTimerOption
+            let action = UIAlertAction(title: Self.menuTitle(option.displayName, selected: isCurrent), style: .default) { [weak self] _ in
+                self?.setSleepTimer(option)
+            }
+            alert.addAction(action)
+            if isCurrent { alert.preferredAction = action }
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        vc.present(alert, animated: true)
+    }
+
+    private func setSleepTimer(_ option: SleepTimerOption) {
+        sleepTimer?.invalidate()
+        sleepTimer = nil
+        sleepTimerFiresAt = nil
+        sleepTimerOption = option
+        guard let seconds = option.seconds else {
+            if option == .endOfVideo { transportBar?.showSpeedNotification("Stops after this video") }
+            return
+        }
+        sleepTimerFiresAt = Date().addingTimeInterval(seconds)
+        let timer = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
+            self?.sleepTimerFired()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        sleepTimer = timer
+        transportBar?.showSpeedNotification("Sleep in \(Self.minutesLabel(seconds))")
+    }
+
+    private func sleepTimerFired() {
+        sleepTimer = nil
+        sleepTimerFiresAt = nil
+        sleepTimerOption = .off
+        guard !didCallDismiss else { return }
+        transportBar?.pauseIfPlaying()
+        transportBar?.showSpeedNotification("Sleep timer: paused")
+    }
+
+    private static func minutesLabel(_ seconds: TimeInterval) -> String {
+        let minutes = Int((seconds / 60).rounded(.up))
+        if minutes >= 60 {
+            let h = minutes / 60, m = minutes % 60
+            return m == 0 ? "\(h) h" : "\(h) h \(m) min"
+        }
+        return "\(minutes) min"
+    }
+
+    // MARK: Info panel
+
+    /// Title, channel, description, likes and chapters over the video, without closing it.
+    private func presentInfoPanel() {
+        guard let apiClient, let presenter = containerController ?? controller,
+              presenter.presentedViewController == nil else { return }
+        // The transport bar calls this from a button on the main thread.
+        let detailVM = MainActor.assumeIsolated {
+            let vm = VideoDetailViewModel(videoId: videoId, originHost: originHost)
+            vm.configure(apiClient: apiClient, commentReadHost: nil, accountName: nil, canPostComments: false)
+            return vm
+        }
+        let signedIn = accessToken.map { !$0.isEmpty } ?? false
+        let now = player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0
+        let panel = PlayerInfoPanelView(
+            vm: detailVM,
+            placeholder: video,
+            instanceBaseURL: instanceBaseURL,
+            chapters: chapters,
+            currentTime: now.isFinite ? now : 0,
+            isSignedIn: signedIn,
+            isLive: isLive,
+            onSeek: { [weak self] time in
+                self?.infoPanelHost?.dismiss(animated: true)
+                self?.transportBar?.seek(to: time)
+            },
+            onOpenChannel: { [weak self] handle in
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    PlayerPresenter.shared.pendingChannelToOpen = handle
+                }
+                self.infoPanelHost?.dismiss(animated: false)
+                self.dismissPlayer()
+            }
+        )
+        let host = UIHostingController(rootView: panel)
+        host.modalPresentationStyle = .overFullScreen
+        host.view.backgroundColor = .clear
+        infoPanelHost = host
+        presenter.present(host, animated: true)
     }
 
     private func appWillResignActive() {
@@ -1474,7 +1680,7 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
     }
 
     private func savePlaybackPosition() {
-        guard let accountId, let player else { return }
+        guard let accountId, let player, !isLive else { return }
         let currentTime = CMTimeGetSeconds(player.currentTime())
         guard currentTime.isFinite else { return }
         let duration: TimeInterval = {
@@ -1789,6 +1995,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         reportCurrentTime()
         savePlaybackPosition()
         player?.pause()
+        sleepTimer?.invalidate()
+        sleepTimer = nil
         statusObservation = nil
         nextItemPrefetch?.task.cancel()
         nextItemPrefetch = nil
@@ -1805,6 +2013,19 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             userInfo: ["videoId": videoId]
         )
         onDismiss()
+        // "Go to Channel" from the Info panel: the app opens it now that the player is gone.
+        let pendingChannel: String? = MainActor.assumeIsolated {
+            let handle = PlayerPresenter.shared.pendingChannelToOpen
+            PlayerPresenter.shared.pendingChannelToOpen = nil
+            return handle
+        }
+        if let pendingChannel {
+            NotificationCenter.default.post(
+                name: .peerTVOpenChannel,
+                object: nil,
+                userInfo: ["handle": pendingChannel]
+            )
+        }
     }
 
     // MARK: Menus (action sheets; native transport bar is hidden)

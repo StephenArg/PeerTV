@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChannelDetailView: View {
     @EnvironmentObject var session: SessionStore
+    @ObservedObject private var restrictions = ContentRestrictions.shared
     @StateObject private var vm: ChannelDetailViewModel
     @StateObject private var subscription = ChannelSubscriptionViewModel()
     @State private var detailVideoId: String = ""
@@ -61,12 +62,24 @@ struct ChannelDetailView: View {
                             if session.phase == .authenticated && !vm.isOwnChannel {
                                 ChannelSubscribeButton(subscription: subscription)
                             }
+                            if !vm.isOwnChannel {
+                                ChannelBlockButton(handle: channel.handle, displayName: channel.displayName ?? channel.name ?? channel.handle)
+                            }
                         }
                         .padding(.horizontal, 50)
                         .padding(.top, 40)
 
+                        if restrictions.isBlocked(handle: channel.handle) {
+                            ContentUnavailableView(
+                                "Channel Blocked",
+                                systemImage: "hand.raised.slash",
+                                description: Text("Its videos are hidden everywhere in the app. Press Unblock to show them again.")
+                            )
+                            .padding(.top, 60)
+                        }
+
                         // Playlists section
-                        if !vm.playlists.isEmpty {
+                        if !restrictions.isBlocked(handle: channel.handle), !vm.playlists.isEmpty {
                             VStack(alignment: .leading, spacing: 20) {
                                 Text("Playlists")
                                     .font(.title3)
@@ -85,13 +98,14 @@ struct ChannelDetailView: View {
                         }
 
                         // Videos grid
+                        if !restrictions.isBlocked(handle: channel.handle) {
                         VStack(alignment: .leading, spacing: 20) {
                             Text("Videos")
                                 .font(.title3)
                                 .padding(.horizontal, 50)
 
                             LazyVGrid(columns: columns, spacing: 50) {
-                                ForEach(vm.videos, id: \.stableId) { video in
+                                ForEach(restrictions.filtered(vm.videos), id: \.stableId) { video in
                                     Button {
                                         if showDetail { return }
                                         PlayerPresenter.shared.play(
@@ -116,13 +130,14 @@ struct ChannelDetailView: View {
                                             }
                                     )
                                     .onAppear {
-                                        if video.stableId == vm.videos.last?.stableId {
+                                        if video.stableId == restrictions.filtered(vm.videos).last?.stableId {
                                             Task { await vm.loadMoreVideos() }
                                         }
                                     }
                                 }
                             }
                             .padding(.horizontal, 50)
+                        }
                         }
                     }
                 } else if let error = vm.errorMessage {

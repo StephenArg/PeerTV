@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ChannelsListView: View {
+    @ObservedObject private var restrictions = ContentRestrictions.shared
     @EnvironmentObject var session: SessionStore
     @Environment(\.peerTVChannelsTabRefreshToken) private var channelsTabRefreshToken
     @StateObject private var vm = ChannelsViewModel()
@@ -42,14 +43,15 @@ struct ChannelsListView: View {
                 }
                 .padding(.horizontal, 60)
 
+                let visibleChannels = restrictions.filtered(vm.channels)
                 LazyVGrid(columns: columns, spacing: 40) {
-                    ForEach(vm.channels) { channel in
+                    ForEach(visibleChannels) { channel in
                         NavigationLink(value: channel) {
                             ChannelCardView(channel: channel)
                         }
                         .buttonStyle(.card)
                         .onAppear {
-                            if channel.id == vm.channels.last?.id {
+                            if channel.id == visibleChannels.last?.id {
                                 Task { await vm.loadMore() }
                             }
                         }
@@ -124,6 +126,7 @@ struct ChannelsListView: View {
 /// Full-screen channel search over the connected server (`GET /api/v1/search/video-channels`),
 /// limited to channels hosted there when the Channels tab is set to "this server only".
 struct ChannelSearchView: View {
+    @ObservedObject private var restrictions = ContentRestrictions.shared
     @EnvironmentObject var session: SessionStore
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = ChannelSearchViewModel()
@@ -156,14 +159,15 @@ struct ChannelSearchView: View {
                                     .padding(.horizontal, 60)
                             }
 
+                            let visibleResults = restrictions.filtered(vm.results)
                             LazyVGrid(columns: columns, spacing: 40) {
-                                ForEach(vm.results) { channel in
+                                ForEach(visibleResults) { channel in
                                     NavigationLink(value: channel) {
                                         ChannelCardView(channel: channel)
                                     }
                                     .buttonStyle(.card)
                                     .onAppear {
-                                        if channel.id == vm.results.last?.id {
+                                        if channel.id == visibleResults.last?.id {
                                             Task { await vm.loadMore() }
                                         }
                                     }

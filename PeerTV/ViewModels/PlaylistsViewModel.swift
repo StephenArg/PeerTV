@@ -87,4 +87,6 @@ extension Notification.Name {
 
     /// Posted when the player is dismissed so the playlist can restore focus to the last-played tile.
     static let peerTVPlayerDismissed = Notification.Name("PeerTV.playerDismissed")
+    /// Posted after the player closes when its Info panel asked to open a channel; `userInfo["handle"]` is `name@host`.
+    static let peerTVOpenChannel = Notification.Name("PeerTV.openChannel")
 }

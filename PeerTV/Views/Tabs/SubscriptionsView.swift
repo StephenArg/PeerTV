@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SubscriptionsView: View {
+    @ObservedObject private var restrictions = ContentRestrictions.shared
     @EnvironmentObject var session: SessionStore
     @Environment(\.peerTVSubscriptionsTabRefreshToken) private var subscriptionsTabRefreshToken
     @StateObject private var vm = SubscriptionsViewModel()
@@ -37,7 +38,7 @@ struct SubscriptionsView: View {
                                 .padding(.horizontal, 50)
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 30) {
-                                    ForEach(vm.subscriptions) { sub in
+                                    ForEach(restrictions.filtered(vm.subscriptions)) { sub in
                                         NavigationLink(value: sub) {
                                             VStack(spacing: 12) {
                                                 ChannelAvatarView(
@@ -65,8 +66,9 @@ struct SubscriptionsView: View {
                         }
                     }
 
+                    let visibleFeed = restrictions.filtered(vm.feedVideos)
                     LazyVGrid(columns: columns, spacing: 50) {
-                        ForEach(vm.feedVideos, id: \.stableId) { video in
+                        ForEach(visibleFeed, id: \.stableId) { video in
                             Button {
                                 if showDetail { return }
                                 PlayerPresenter.shared.play(
@@ -91,7 +93,7 @@ struct SubscriptionsView: View {
                                     }
                             )
                             .onAppear {
-                                if video.stableId == vm.feedVideos.last?.stableId {
+                                if video.stableId == visibleFeed.last?.stableId {
                                     Task { await vm.loadMoreFeed() }
                                 }
                             }

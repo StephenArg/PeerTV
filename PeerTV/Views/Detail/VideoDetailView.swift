@@ -158,10 +158,16 @@ struct VideoDetailView: View {
                             }
 
                             HStack(spacing: 24) {
+                                if video.isLive == true {
+                                    Label(video.state?.id == VideoState.liveEnded ? "Stream ended"
+                                          : video.state?.id == VideoState.waitingForLive ? "Not started"
+                                          : "Live", systemImage: "dot.radiowaves.left.and.right")
+                                        .foregroundStyle(.red)
+                                }
                                 if let views = video.views {
                                     Label("\(views) views", systemImage: "eye")
                                 }
-                                if !video.formattedDuration.isEmpty {
+                                if video.isLive != true, !video.formattedDuration.isEmpty {
                                     Label(video.formattedDuration, systemImage: "clock")
                                 }
                                 if let likes = video.likes {
@@ -422,7 +428,21 @@ struct VideoDetailView: View {
             if showsSubscribeButton(for: video) {
                 ChannelSubscribeButton(subscription: subscription)
             }
+
+            if let handle = VideoDetailViewModel.channelHandle(for: video), !isOwnVideo(video) {
+                ChannelBlockButton(
+                    handle: handle,
+                    displayName: video.channel?.displayName ?? video.channel?.name ?? handle
+                )
+            }
         }
+    }
+
+    /// Blocking your own channel would hide your own uploads from yourself.
+    private func isOwnVideo(_ video: Video) -> Bool {
+        guard !session.isAnonymous, !session.username.isEmpty else { return false }
+        return video.account?.name?.lowercased() == session.username.lowercased()
+            && (video.account?.host?.lowercased() == session.baseURL?.host?.lowercased())
     }
 
     private func channelIdentity(video: Video, showsChevron: Bool) -> some View {

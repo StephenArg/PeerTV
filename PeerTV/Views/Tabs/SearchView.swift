@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SearchView: View {
+    @ObservedObject private var restrictions = ContentRestrictions.shared
     @EnvironmentObject var session: SessionStore
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = SearchViewModel()
@@ -123,8 +124,9 @@ struct SearchView: View {
                         .padding(.horizontal, 50)
                 }
 
+                let visibleResults = restrictions.filtered(vm.results)
                 LazyVGrid(columns: columns, spacing: 50) {
-                    ForEach(vm.results, id: \.stableId) { video in
+                    ForEach(visibleResults, id: \.stableId) { video in
                         Button {
                             if showDetail { return }
                             let ctx = vm.playbackContext(
@@ -171,7 +173,7 @@ struct SearchView: View {
                                 }
                         )
                         .onAppear {
-                            if video.stableId == vm.results.last?.stableId {
+                            if video.stableId == visibleResults.last?.stableId {
                                 Task { await vm.loadMore() }
                             }
                         }

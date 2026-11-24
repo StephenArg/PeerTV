@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct HistoryView: View {
+    @ObservedObject private var restrictions = ContentRestrictions.shared
     @EnvironmentObject var session: SessionStore
     @Environment(\.peerTVHistoryTabRefreshToken) private var historyTabRefreshToken
     @StateObject private var vm = HistoryViewModel()
@@ -26,7 +27,7 @@ struct HistoryView: View {
     }
 
     private var displayVideos: [Video] {
-        session.isAnonymous ? anonymousVM.videos : vm.videos
+        restrictions.filtered(session.isAnonymous ? anonymousVM.videos : vm.videos)
     }
 
     private var isLoading: Bool {
@@ -104,7 +105,7 @@ struct HistoryView: View {
                                     }
                             )
                             .onAppear {
-                                if !session.isAnonymous, video.stableId == vm.videos.last?.stableId {
+                                if !session.isAnonymous, video.stableId == displayVideos.last?.stableId {
                                     Task { await vm.loadMore() }
                                 }
                             }

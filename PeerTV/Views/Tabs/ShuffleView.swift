@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ShuffleView: View {
+    @ObservedObject private var restrictions = ContentRestrictions.shared
     @EnvironmentObject var session: SessionStore
     @Environment(\.peerTVShuffleTabStaleRefreshToken) private var shuffleStaleRefreshToken
     @StateObject private var vm = ShuffleViewModel()
@@ -36,7 +37,7 @@ struct ShuffleView: View {
                 .padding(.horizontal, 50)
 
                 LazyVGrid(columns: columns, spacing: 50) {
-                    ForEach(vm.videos, id: \.stableId) { video in
+                    ForEach(restrictions.filtered(vm.videos), id: \.stableId) { video in
                         Button {
                             if showDetail { return }
                             PlayerPresenter.shared.play(

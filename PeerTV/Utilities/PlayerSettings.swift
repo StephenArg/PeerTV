@@ -84,6 +84,80 @@ enum DefaultResolution: Int, CaseIterable, Identifiable {
     }
 }
 
+/// What the readout under the scrubber shows (Settings → Playback → Playback stats).
+enum PlaybackStatsDisplay: Int, CaseIterable, Identifiable {
+    case off = 0
+    /// Download speed and buffering state, as before.
+    case networkSpeed = 1
+    /// Also the playing resolution and the stream's bitrate.
+    case detailed = 2
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .off: return "Off"
+        case .networkSpeed: return "Network speed"
+        case .detailed: return "Speed, resolution and bitrate"
+        }
+    }
+}
+
+/// Playback time without any remote input before the player asks "Still watching?".
+enum StillWatchingInterval: Int, CaseIterable, Identifiable {
+    case off = 0
+    case thirtyMinutes = 30
+    case oneHour = 60
+    case twoHours = 120
+    case threeHours = 180
+    case fourHours = 240
+
+    static let `default`: StillWatchingInterval = .twoHours
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .off: return "Off"
+        case .thirtyMinutes: return "After 30 minutes"
+        case .oneHour: return "After 1 hour"
+        case .twoHours: return "After 2 hours"
+        case .threeHours: return "After 3 hours"
+        case .fourHours: return "After 4 hours"
+        }
+    }
+
+    var seconds: TimeInterval? { self == .off ? nil : TimeInterval(rawValue * 60) }
+}
+
+/// Sleep timer choices in the player. Not persisted: it belongs to the viewing session.
+enum SleepTimerOption: Int, CaseIterable, Identifiable {
+    case off = 0
+    case fifteenMinutes = 15
+    case thirtyMinutes = 30
+    case fortyFiveMinutes = 45
+    case oneHour = 60
+    case ninetyMinutes = 90
+    /// Stop when the current video ends instead of playing the next one.
+    case endOfVideo = -1
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .off: return "Off"
+        case .fifteenMinutes: return "15 minutes"
+        case .thirtyMinutes: return "30 minutes"
+        case .fortyFiveMinutes: return "45 minutes"
+        case .oneHour: return "1 hour"
+        case .ninetyMinutes: return "1 hour 30 minutes"
+        case .endOfVideo: return "When this video ends"
+        }
+    }
+
+    var seconds: TimeInterval? { rawValue > 0 ? TimeInterval(rawValue * 60) : nil }
+}
+
 /// Persistent playback settings stored in `UserDefaults`.
 enum PlayerSettings {
     static let bufferCapKey = "PeerTV.bufferCapMB"
@@ -91,9 +165,43 @@ enum PlayerSettings {
     /// BCP-47 language id of the last selected caption track, or unset when captions are Off.
     static let preferredCaptionLanguageKey = "PeerTV.preferredCaptionLanguage"
     static let defaultPlaybackSpeedKey = "PeerTV.defaultPlaybackSpeed"
+    static let skipIntervalKey = "PeerTV.skipIntervalSeconds"
+    static let holdSpeedKey = "PeerTV.holdSpeed"
+    static let playbackStatsKey = "PeerTV.playbackStats"
+    static let stillWatchingKey = "PeerTV.stillWatchingAfterMinutes"
 
     /// Speeds offered by the player's Speed menu and the Default speed setting, fastest first.
     static let playbackSpeeds: [Float] = [3.0, 2.0, 1.5, 1.25, 1.0, 0.75, 0.5]
+
+    /// Seconds a left/right tap on the scrubber skips, and the Now Playing skip interval.
+    static let skipIntervals: [Double] = [5, 10, 15, 30, 60]
+    static let defaultSkipInterval: Double = 10
+
+    static var skipInterval: Double {
+        let stored = UserDefaults.standard.double(forKey: skipIntervalKey)
+        return stored > 0 ? stored : defaultSkipInterval
+    }
+
+    /// Rate while the touchpad click is held or a finger rests on the touchpad.
+    static let holdSpeeds: [Float] = [1.5, 2.0, 3.0]
+    static let defaultHoldSpeed: Float = 2.0
+
+    static var holdSpeed: Float {
+        let stored = UserDefaults.standard.double(forKey: holdSpeedKey)
+        return stored > 0 ? Float(stored) : defaultHoldSpeed
+    }
+
+    /// Defaults to the network-speed readout the bar has always shown.
+    static var playbackStats: PlaybackStatsDisplay {
+        guard UserDefaults.standard.object(forKey: playbackStatsKey) != nil else { return .networkSpeed }
+        return PlaybackStatsDisplay(rawValue: UserDefaults.standard.integer(forKey: playbackStatsKey)) ?? .networkSpeed
+    }
+
+    /// On by default (two hours); `.off` disables the prompt.
+    static var stillWatchingInterval: StillWatchingInterval {
+        guard UserDefaults.standard.object(forKey: stillWatchingKey) != nil else { return .default }
+        return StillWatchingInterval(rawValue: UserDefaults.standard.integer(forKey: stillWatchingKey)) ?? .default
+    }
 
     /// Speed every video starts at (Settings → Playback). The player's Speed menu only changes the
     /// video being watched. Stored as a Double so the Settings `@AppStorage` can bind to it.

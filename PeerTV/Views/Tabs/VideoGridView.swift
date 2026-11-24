@@ -3,6 +3,7 @@ import SwiftUI
 struct VideoGridView: View {
     @EnvironmentObject var session: SessionStore
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var restrictions = ContentRestrictions.shared
     @StateObject private var vm = HomeViewModel()
     @State private var wasBackgrounded = false
     @State private var detailVideoId: String = ""
@@ -140,8 +141,9 @@ struct VideoGridView: View {
                     }
                     .padding(.horizontal, 50)
 
+                    let visibleVideos = restrictions.filtered(vm.videos)
                     LazyVGrid(columns: columns, spacing: 50) {
-                        ForEach(vm.videos, id: \.stableId) { video in
+                        ForEach(visibleVideos, id: \.stableId) { video in
                             Button {
                                 if showDetail { return }
                                 let tileThumb = VideoTileImageURL.thumbnail(
@@ -200,7 +202,8 @@ struct VideoGridView: View {
                                 if isFediverseTrending {
                                     Task { await vm.enrichFediverseRow(for: video.stableId) }
                                 }
-                                if video.stableId == vm.videos.last?.stableId {
+                                // Last *visible* row: a hidden last row would never appear and paging would stall.
+                                if video.stableId == visibleVideos.last?.stableId {
                                     Task { await vm.loadMore() }
                                 }
                             }
@@ -646,7 +649,21 @@ struct VideoCardView: View {
                         }
                     }
 
-                if !video.formattedDuration.isEmpty {
+                if video.isLive == true {
+                    Text("LIVE")
+                        .font(.caption2)
+                        .bold()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Color.red.opacity(0.9))
+                        )
+                        .drawingGroup()
+                        .padding(8)
+                        .accessibilityLabel("Live stream")
+                } else if !video.formattedDuration.isEmpty {
                     Text(video.formattedDuration)
                         .font(.caption2)
                         .monospacedDigit()

@@ -26,8 +26,22 @@ struct Video: Decodable, Identifiable, Hashable {
     let language: VideoLanguage?
     /// Detail responses only; list rows have none.
     let tags: [String]?
+    /// A live stream (its `duration` is 0 while it runs). `state` says whether it is on air.
+    let isLive: Bool?
+    let state: VideoState?
+    /// Marked sensitive by its uploader.
+    let nsfw: Bool?
 
     var stableId: String { uuid ?? "\(id ?? 0)" }
+
+    /// `name@host` of the channel, the form the channel endpoints and the block list use.
+    var channelHandle: String? {
+        guard let name = channel?.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+        if let host = channel?.host?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty {
+            return "\(name)@\(host)".lowercased()
+        }
+        return name.lowercased()
+    }
 
     /// The language code when one is set (`nil` for PeerTube's `{id: null}` placeholder).
     var languageId: String? {
@@ -56,7 +70,10 @@ struct Video: Decodable, Identifiable, Hashable {
         files: [VideoFile]?,
         commentReadHost: String? = nil,
         language: VideoLanguage? = nil,
-        tags: [String]? = nil
+        tags: [String]? = nil,
+        isLive: Bool? = nil,
+        state: VideoState? = nil,
+        nsfw: Bool? = nil
     ) {
         self.id = id
         self.uuid = uuid
@@ -79,6 +96,9 @@ struct Video: Decodable, Identifiable, Hashable {
         self.commentReadHost = commentReadHost
         self.language = language
         self.tags = tags
+        self.isLive = isLive
+        self.state = state
+        self.nsfw = nsfw
     }
 
     init(from decoder: Decoder) throws {
@@ -114,12 +134,16 @@ struct Video: Decodable, Identifiable, Hashable {
         commentReadHost = nil
         language = try? c.decodeIfPresent(VideoLanguage.self, forKey: .language)
         tags = try? c.decodeIfPresent([String].self, forKey: .tags)
+        isLive = try? c.decodeIfPresent(Bool.self, forKey: .isLive)
+        state = try? c.decodeIfPresent(VideoState.self, forKey: .state)
+        nsfw = try? c.decodeIfPresent(Bool.self, forKey: .nsfw)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, uuid, name, description, duration, views, likes, dislikes
         case createdAt, publishedAt, thumbnailPath, previewPath, thumbnails, embedPath
         case channel, account, privacy, streamingPlaylists, files, language, tags
+        case isLive, state, nsfw
     }
 
     /// Federated origin hostname (no scheme), when the video is not on the connected instance.
@@ -252,7 +276,10 @@ struct Video: Decodable, Identifiable, Hashable {
             files: files,
             commentReadHost: indexHost ?? commentReadHost,
             language: language,
-            tags: tags
+            tags: tags,
+            isLive: isLive,
+            state: state,
+            nsfw: nsfw
         )
     }
 
@@ -281,7 +308,10 @@ struct Video: Decodable, Identifiable, Hashable {
             files: files,
             commentReadHost: trimmed,
             language: language,
-            tags: tags
+            tags: tags,
+            isLive: isLive,
+            state: state,
+            nsfw: nsfw
         )
     }
 
@@ -333,7 +363,10 @@ struct Video: Decodable, Identifiable, Hashable {
             files: files,
             commentReadHost: commentReadHost,
             language: language,
-            tags: tags
+            tags: tags,
+            isLive: isLive,
+            state: state,
+            nsfw: nsfw
         )
     }
 
@@ -405,7 +438,10 @@ struct Video: Decodable, Identifiable, Hashable {
             files: files,
             commentReadHost: commentReadHost,
             language: language,
-            tags: tags
+            tags: tags,
+            isLive: isLive,
+            state: state,
+            nsfw: nsfw
         )
     }
 
@@ -441,7 +477,10 @@ struct Video: Decodable, Identifiable, Hashable {
             files: files,
             commentReadHost: commentReadHost,
             language: language,
-            tags: tags
+            tags: tags,
+            isLive: isLive,
+            state: state,
+            nsfw: nsfw
         )
     }
 
@@ -728,6 +767,16 @@ struct VideoPrivacy: Decodable {
 /// `language` on a video: an ISO 639 code such as `en` or `pt-BR` and its English label.
 struct VideoLanguage: Decodable, Hashable {
     let id: String?
+    let label: String?
+}
+
+/// `state` on a video. For live streams: 1 while on air, 4 before it starts, 5 once it ended.
+struct VideoState: Decodable, Hashable {
+    static let published = 1
+    static let waitingForLive = 4
+    static let liveEnded = 5
+
+    let id: Int?
     let label: String?
 }
 

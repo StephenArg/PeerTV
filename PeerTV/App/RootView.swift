@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject var session: SessionStore
     @EnvironmentObject var appThemeStore: AppThemeStore
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -22,5 +23,13 @@ struct RootView: View {
             }
         }
         .peerTVAppTheme(appThemeStore.theme)
+        .onAppear {
+            // Next turn of the run loop, once the app's own window is key.
+            DispatchQueue.main.async { AppLockController.shared.lockIfNeeded() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Locked while away, so the PIN screen is already up when the app comes back.
+            if phase == .background { AppLockController.shared.lockIfNeeded() }
+        }
     }
 }

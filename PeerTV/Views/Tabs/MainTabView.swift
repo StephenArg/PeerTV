@@ -23,6 +23,8 @@ struct MainTabView: View {
     /// Last time the user left the Shuffle tab; used to refetch only after a long absence (see `ShuffleView`).
     @State private var shuffleTabLeftAt: Date?
     @State private var shuffleStaleRefreshToken = 0
+    /// Channel the player's Info panel asked to open; shown over whatever tab is up.
+    @State private var channelToOpen: ChannelHandleToOpen?
 
     private static let shuffleTabStaleAwaySeconds: TimeInterval = 60
     /// How long a tab must stay selected before it refreshes. Moving along the tab bar selects every
@@ -78,6 +80,17 @@ struct MainTabView: View {
                 .tag(MainTabSelection.settings)
         }
         .modifier(TabBarStyleModifier(style: tabBarStyle))
+        .onReceive(NotificationCenter.default.publisher(for: .peerTVOpenChannel)) { note in
+            guard let handle = note.userInfo?["handle"] as? String, !handle.isEmpty else { return }
+            channelToOpen = ChannelHandleToOpen(handle: handle)
+        }
+        .fullScreenCover(item: $channelToOpen) { target in
+            NavigationStack {
+                ChannelDetailView(handle: target.handle)
+            }
+            .environmentObject(session)
+            .presentationBackground(.black)
+        }
         .onChange(of: session.isAnonymous) { _, anonymous in
             guard anonymous else { return }
             let stillAvailable: Set<MainTabSelection> = session.canBrowseInstance
@@ -317,4 +330,10 @@ private struct HistoryTab: View {
                 .withSharedDestinations()
         }
     }
+}
+
+/// `fullScreenCover(item:)` payload for a channel opened from the player.
+private struct ChannelHandleToOpen: Identifiable {
+    let handle: String
+    var id: String { handle }
 }

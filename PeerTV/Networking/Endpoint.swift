@@ -191,6 +191,7 @@ enum Endpoint {
                 items.append(URLQueryItem(name: "languageOneOf", value: id))
             }
             if let isLive { items.append(URLQueryItem(name: "isLive", value: isLive ? "true" : "false")) }
+            items.append(contentsOf: sensitiveVideoItems())
             return items
         case .videoChannels(let start, let count, let sort):
             return paging(start: start, count: count) + [URLQueryItem(name: "sort", value: sort)]
@@ -202,13 +203,14 @@ enum Endpoint {
         case .channelVideos(_, let start, let count, let sort, let includeAllPrivacy):
             var items = paging(start: start, count: count) + [URLQueryItem(name: "sort", value: sort)]
             if includeAllPrivacy { items.append(contentsOf: allPrivacyItems()) }
+            items.append(contentsOf: sensitiveVideoItems())
             return items
         case .channelPlaylists(_, let start, let count):
             return paging(start: start, count: count)
         case .mySubscriptions(let start, let count):
             return paging(start: start, count: count)
         case .mySubscriptionVideos(let start, let count, let sort):
-            return paging(start: start, count: count) + [URLQueryItem(name: "sort", value: sort)]
+            return paging(start: start, count: count) + [URLQueryItem(name: "sort", value: sort)] + sensitiveVideoItems()
         case .myHistory(let start, let count):
             return paging(start: start, count: count)
         case .videoPlaylists(let start, let count):
@@ -225,6 +227,7 @@ enum Endpoint {
             switch scope {
             case .instance:
                 if includeAllPrivacy { items.append(contentsOf: allPrivacyItems()) }
+                items.append(contentsOf: sensitiveVideoItems())
             case .global:
                 items.append(URLQueryItem(name: "sort", value: "-match"))
                 items.append(URLQueryItem(name: "nsfw", value: "false"))
@@ -307,6 +310,12 @@ enum Endpoint {
 
     /// Privacy levels: 1=Public, 2=Unlisted, 3=Private, 4=Internal.
     /// include=1 adds non-published states (scheduled, draft).
+    /// `nsfw=false` while Settings → Restrictions hides sensitive videos, so the server leaves
+    /// them out of lists (the app also drops any that slip through).
+    private func sensitiveVideoItems() -> [URLQueryItem] {
+        ContentRestrictions.hidesSensitiveVideos() ? [URLQueryItem(name: "nsfw", value: "false")] : []
+    }
+
     private func allPrivacyItems() -> [URLQueryItem] {
         [
             URLQueryItem(name: "privacyOneOf", value: "1"),

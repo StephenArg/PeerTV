@@ -20,6 +20,10 @@ struct SettingsView: View {
     @AppStorage(PlayerSettings.bufferCapKey) private var bufferCapRawValue: Int = BufferCap.gb1.rawValue
     @AppStorage(PlayerSettings.defaultResolutionKey) private var defaultResolutionRawValue: Int = DefaultResolution.auto.rawValue
     @AppStorage(PlayerSettings.defaultPlaybackSpeedKey) private var defaultPlaybackSpeed: Double = 1.0
+    @AppStorage(PlayerSettings.skipIntervalKey) private var skipInterval: Double = PlayerSettings.defaultSkipInterval
+    @AppStorage(PlayerSettings.holdSpeedKey) private var holdSpeed: Double = Double(PlayerSettings.defaultHoldSpeed)
+    @AppStorage(PlayerSettings.playbackStatsKey) private var playbackStatsRawValue: Int = PlaybackStatsDisplay.networkSpeed.rawValue
+    @AppStorage(PlayerSettings.stillWatchingKey) private var stillWatchingRawValue: Int = StillWatchingInterval.default.rawValue
     @AppStorage(TabBarStyle.storageKey) private var tabBarStyle: TabBarStyle = .topBar
 
     var body: some View {
@@ -97,6 +101,30 @@ struct SettingsView: View {
                         }
                     }
                     Text("Every video starts at this speed, including the next one in a playlist. Changing speed in the player only affects the video you're watching.\n")
+                    Picker("Hold speed", selection: $holdSpeed) {
+                        ForEach(PlayerSettings.holdSpeeds, id: \.self) { speed in
+                            Text(PlayerSettings.speedLabel(speed)).tag(Double(speed))
+                        }
+                    }
+                    Text("Speed while you hold the touchpad click, or rest a finger on the touchpad during playback.\n")
+                    Picker("Skip interval", selection: $skipInterval) {
+                        ForEach(PlayerSettings.skipIntervals, id: \.self) { seconds in
+                            Text("\(Int(seconds)) seconds").tag(seconds)
+                        }
+                    }
+                    Text("How far a left or right tap on the scrubber jumps.\n")
+                    Picker("Playback stats", selection: $playbackStatsRawValue) {
+                        ForEach(PlaybackStatsDisplay.allCases) { display in
+                            Text(display.displayName).tag(display.rawValue)
+                        }
+                    }
+                    Text("The readout under the scrubber: download speed and buffering, optionally with the playing resolution and bitrate, or nothing.\n")
+                    Picker("Still watching?", selection: $stillWatchingRawValue) {
+                        ForEach(StillWatchingInterval.allCases) { interval in
+                            Text(interval.displayName).tag(interval.rawValue)
+                        }
+                    }
+                    Text("After this long of playback without touching the remote, the player pauses and asks whether to continue. Any press on the remote restarts the count.\n")
                     Picker("Buffer cap", selection: $bufferCapRawValue) {
                         ForEach(BufferCap.allCases) { cap in
                             Text(cap.displayName).tag(cap.rawValue)
@@ -124,6 +152,12 @@ struct SettingsView: View {
 
                     Toggle("Show progress on thumbnails", isOn: $showThumbnailProgressBars)
                     Text("Partially watched videos show a thin progress bar at the bottom of their thumbnail.")
+                }
+
+                settingsSection(title: "Restrictions") {
+                    RestrictionsSettingsView()
+                } footer: {
+                    Text("For shared TVs. With a PIN set, PeerTV asks for it every time it opens or comes back from the background, and again to unblock a channel, show sensitive videos or turn the lock off. Blocking a channel never needs it. The PIN is stored only in the app, so deleting PeerTV removes it; that is also the way out of a forgotten PIN.")
                 }
 
                 settingsSection(title: "Navigation") {
