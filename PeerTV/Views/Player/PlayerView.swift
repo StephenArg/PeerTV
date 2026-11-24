@@ -82,8 +82,18 @@ struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
 
     /// Bearer is only attached for URLs on the PeerTube instance host. Object storage / CDNs
     /// often reject `Authorization: Bearer` (e.g. S3 expects SigV4), which breaks HLS.
-    static func makeAsset(url: URL, accessToken: String?, instanceBaseURL: URL?) -> AVURLAsset {
+    /// `cachesSegments` routes an HLS stream through `HLSCacheProxy`, so video already downloaded
+    /// is kept and jumping back doesn't fetch it again. Off for live streams, local files and
+    /// downloads; if the proxy isn't running, the stream is played directly.
+    static func makeAsset(url: URL, accessToken: String?, instanceBaseURL: URL?, cachesSegments: Bool = false) -> AVURLAsset {
         let bearer = Self.bearerTokenForPlayback(url: url, accessToken: accessToken, instanceBaseURL: instanceBaseURL)
+        if cachesSegments, HLSCacheProxy.isPlaylist(url) {
+            // The proxy sends the token upstream; the player only talks to 127.0.0.1.
+            let headers = bearer.map { ["Authorization": "Bearer \($0)"] } ?? [:]
+            if let proxied = HLSCacheProxy.shared.proxiedURL(for: url, headers: headers) {
+                return AVURLAsset(url: proxied)
+            }
+        }
         guard let bearer, !bearer.isEmpty else {
             return AVURLAsset(url: url)
         }

@@ -425,7 +425,8 @@ final class PlayerPresenter {
         let asset = AVPlayerViewControllerRepresentable.makeAsset(
             url: url,
             accessToken: accessToken,
-            instanceBaseURL: apiClient.baseURL
+            instanceBaseURL: apiClient.baseURL,
+            cachesSegments: !isLocalDownload && !isLive
         )
         let item = AVPlayerItem(asset: asset)
         HLSPlaybackPreferences.applyPreferredMaximumResolution(preferredMaximumResolution, to: item)
@@ -1307,7 +1308,11 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         if let queue = playlistQueue,
            queue.autoplayEnabled,
            queue.currentIndex + 1 < queue.videoIds.count {
-            advanceToNextPlaylistItemIfPossible()
+            if shouldAskStillWatching {
+                askStillWatchingThenAdvance()
+            } else {
+                advanceToNextPlaylistItemIfPossible()
+            }
             return
         }
         dismissPlayer()
@@ -1463,7 +1468,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
         let asset = AVPlayerViewControllerRepresentable.makeAsset(
             url: url,
             accessToken: queue.accessToken,
-            instanceBaseURL: queue.apiClient.baseURL
+            instanceBaseURL: queue.apiClient.baseURL,
+            cachesSegments: video.isLive != true
         )
         return PreparedPlaylistItem(video: video, url: url, asset: asset)
     }
@@ -1517,37 +1523,39 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             self?.reportCurrentTime()
             self?.savePlaybackPositionMidPlayback(throttled: true)
             self?.prefetchNextPlaylistItemIfNeeded()
-            self?.promptStillWatchingIfNeeded()
         }
     }
 
     // MARK: Still watching?
 
-    /// Pauses and asks after `PlayerSettings.stillWatchingInterval` of playback with no remote
-    /// input. Runs from the progress observer, so paused time doesn't count. Skipped in Picture
-    /// in Picture, where there is nothing on screen to answer on.
-    private func promptStillWatchingIfNeeded() {
-        guard !isStillWatchingPromptShowing, !isSwitching, !isInPictureInPicture, !didCallDismiss else { return }
-        guard let limit = PlayerSettings.stillWatchingInterval.seconds else { return }
-        guard Date().timeIntervalSince(lastUserInputAt) >= limit else { return }
-        guard let vc = containerController ?? controller, vc.presentedViewController == nil else { return }
+    /// True when the next playlist item should wait for "Still watching?": the remote hasn't been
+    /// used for `PlayerSettings.stillWatchingInterval`. Only playlist autoplay asks; a single video
+    /// just ends. Skipped in Picture in Picture, where there is nothing on screen to answer on.
+    private var shouldAskStillWatching: Bool {
+        guard !isInPictureInPicture, let limit = PlayerSettings.stillWatchingInterval.seconds else { return false }
+        return Date().timeIntervalSince(lastUserInputAt) >= limit
+    }
 
+    /// Asks before autoplay moves on. Continue plays the next item; Stop closes the player.
+    private func askStillWatchingThenAdvance() {
+        guard !isStillWatchingPromptShowing, !didCallDismiss,
+              let vc = containerController ?? controller else { return }
+        // Something else is on screen (a menu): don't stack on it; play on as before.
+        guard vc.presentedViewController == nil else {
+            advanceToNextPlaylistItemIfPossible()
+            return
+        }
         isStillWatchingPromptShowing = true
-        transportBar?.pauseIfPlaying()
-        let hours = limit / 3600
-        let elapsed = hours >= 1
-            ? (hours == hours.rounded() ? "\(Int(hours)) hour\(hours == 1 ? "" : "s")" : String(format: "%.1f hours", hours))
-            : "\(Int(limit / 60)) minutes"
         let alert = UIAlertController(
             title: "Still watching?",
-            message: "Playback paused after \(elapsed) without using the remote. You can change or turn this off in Settings.",
+            message: "The next video in the playlist is ready. Playlists stop here \(PlayerSettings.stillWatchingInterval.displayName.lowercased()) without using the remote; change this in Settings.",
             preferredStyle: .alert
         )
-        let continueAction = UIAlertAction(title: "Continue Watching", style: .default) { [weak self] _ in
+        let continueAction = UIAlertAction(title: "Play Next", style: .default) { [weak self] _ in
             guard let self else { return }
             self.isStillWatchingPromptShowing = false
             self.lastUserInputAt = Date()
-            self.transportBar?.resumeIfPaused()
+            self.advanceToNextPlaylistItemIfPossible()
         }
         alert.addAction(continueAction)
         alert.addAction(UIAlertAction(title: "Stop", style: .cancel) { [weak self] _ in
@@ -2142,7 +2150,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
                 let asset = AVPlayerViewControllerRepresentable.makeAsset(
                     url: withToken,
                     accessToken: self.accessToken,
-                    instanceBaseURL: self.instanceBaseURL
+                    instanceBaseURL: self.instanceBaseURL,
+                    cachesSegments: !self.isLocalDownload && !self.isLive
                 )
                 self.performAssetSwap(
                     asset: asset,
@@ -2156,7 +2165,8 @@ final class PlayerCoordinator: NSObject, AVPlayerViewControllerDelegate, AVPictu
             let asset = AVPlayerViewControllerRepresentable.makeAsset(
                 url: targetURL,
                 accessToken: accessToken,
-                instanceBaseURL: instanceBaseURL
+                instanceBaseURL: instanceBaseURL,
+                cachesSegments: !isLocalDownload && !isLive
             )
             performAssetSwap(
                 asset: asset,

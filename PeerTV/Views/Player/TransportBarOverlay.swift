@@ -2070,7 +2070,9 @@ final class TransportBarController: NSObject {
             onTimeUpdate?(0)
             return
         }
-        if isLiveStream || player.currentItem?.duration.isIndefinite == true {
+        // Only the video's own `isLive` decides this. Every item reports an indefinite duration
+        // until it has loaded, so treating that as live flashed LIVE on ordinary videos.
+        if isLiveStream {
             updateFromLivePlayer(player)
             return
         }

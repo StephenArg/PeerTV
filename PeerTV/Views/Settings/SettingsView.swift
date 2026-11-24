@@ -27,230 +27,26 @@ struct SettingsView: View {
     @AppStorage(TabBarStyle.storageKey) private var tabBarStyle: TabBarStyle = .topBar
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 36) {
-                Text("Settings")
-                    .font(.title3)
-                    .bold()
+        // The outer reader keeps the safe area, so it knows how tall the tab bar region is; the
+        // inner layout runs edge to edge so the brand panel fills the left half behind it.
+        GeometryReader { outer in
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                SettingsBrandPanel(versionText: Self.appVersionText, connectionText: connectionDescription)
+                    .frame(width: geo.size.width / 2)
 
-                settingsSection(title: "Accounts") {
-                    if session.isAnonymous {
-                        anonymousAccountsSection
-                    } else {
-                        ForEach(session.sortedAccounts) { account in
-                            accountRow(account)
-                        }
-                    }
-
-                    Button {
-                        session.beginAddAccount()
-                    } label: {
-                        HStack {
-                            Image(systemName: "plus.circle.fill")
-                            Text("Add Account")
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 16)
-                        .padding(.horizontal, 20)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.card)
-                } footer: {
-                    if session.isAnonymous {
-                        Text("Sign out ends anonymous browsing and returns to sign-in, or to server selection when no server is chosen. Adding an account signs you in and leaves anonymous mode.")
-                    } else {
-                        Text("Select an account to use it for the whole app. Sign out removes saved login for that account only. Player, theme, and other app preferences stay shared.")
-                    }
+                ScrollView {
+                    settingsList
+                        .padding(.horizontal, 60)
+                        // The layout runs under the tab bar; the list starts below it.
+                        .padding(.top, 50 + outer.safeAreaInsets.top)
+                        .padding(.bottom, 120)
                 }
-
-                if !session.isAnonymous {
-                    settingsSection(title: "Downloads") {
-                        NavigationLink {
-                            DownloadedVideosView()
-                        } label: {
-                            HStack {
-                                Text("Downloaded Videos")
-                                Spacer()
-                                Text(downloadManager.downloadedVideos.isEmpty
-                                     ? "None"
-                                     : downloadManager.downloadedVideos.storageSummary)
-                                    .foregroundStyle(.secondary)
-                                Image(systemName: "chevron.right")
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 16)
-                            .padding(.horizontal, 20)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.card)
-                    }
-                }
-
-                settingsSection(title: "Playback") {
-                    Picker("Default quality", selection: $defaultResolutionRawValue) {
-                        ForEach(DefaultResolution.allCases) { res in
-                            Text(res.displayName).tag(res.rawValue)
-                        }
-                    }
-                    Text("Default quality applies when a video opens. If the chosen resolution isn't offered, the next lower one plays (falling back to Auto if none exists). Auto uses HLS adaptive bitrate.\n")
-                    Picker("Default speed", selection: $defaultPlaybackSpeed) {
-                        ForEach(PlayerSettings.playbackSpeeds, id: \.self) { speed in
-                            Text(PlayerSettings.speedLabel(speed)).tag(Double(speed))
-                        }
-                    }
-                    Text("Every video starts at this speed, including the next one in a playlist. Changing speed in the player only affects the video you're watching.\n")
-                    Picker("Hold speed", selection: $holdSpeed) {
-                        ForEach(PlayerSettings.holdSpeeds, id: \.self) { speed in
-                            Text(PlayerSettings.speedLabel(speed)).tag(Double(speed))
-                        }
-                    }
-                    Text("Speed while you hold the touchpad click, or rest a finger on the touchpad during playback.\n")
-                    Picker("Skip interval", selection: $skipInterval) {
-                        ForEach(PlayerSettings.skipIntervals, id: \.self) { seconds in
-                            Text("\(Int(seconds)) seconds").tag(seconds)
-                        }
-                    }
-                    Text("How far a left or right tap on the scrubber jumps.\n")
-                    Picker("Playback stats", selection: $playbackStatsRawValue) {
-                        ForEach(PlaybackStatsDisplay.allCases) { display in
-                            Text(display.displayName).tag(display.rawValue)
-                        }
-                    }
-                    Text("The readout under the scrubber: download speed and buffering, optionally with the playing resolution and bitrate, or nothing.\n")
-                    Picker("Still watching?", selection: $stillWatchingRawValue) {
-                        ForEach(StillWatchingInterval.allCases) { interval in
-                            Text(interval.displayName).tag(interval.rawValue)
-                        }
-                    }
-                    Text("After this long of playback without touching the remote, the player pauses and asks whether to continue. Any press on the remote restarts the count.\n")
-                    Picker("Buffer cap", selection: $bufferCapRawValue) {
-                        ForEach(BufferCap.allCases) { cap in
-                            Text(cap.displayName).tag(cap.rawValue)
-                        }
-                    }
-                    Text("Buffer cap is roughly how much video is kept loaded ahead of where you are. The same cap covers less time at higher quality: far fewer minutes of 4K than of 720p. Larger caps smooth over slow networks at the cost of memory.\n")
-
-                    Toggle("Resume playback", isOn: $resumePlaybackEnabled)
-                    if resumePlaybackEnabled {
-                        Button {
-                            showClearPositionsAlert = true
-                        } label: {
-                            HStack {
-                                Text("Clear saved positions")
-                                Spacer()
-                                Text("\(savedPositionCount) saved")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    Text("When enabled, videos resume from where you left off. Positions are cleared when a video finishes (within 7% of the end).")
-
-                    Toggle("Preview thumbnails on focus", isOn: $tilePreviewEnabled)
-                    Text("When a video is highlighted, its tile cycles through preview frames (the same thumbnails shown when scrubbing). Turn off to always show a single static thumbnail.")
-
-                    Toggle("Show progress on thumbnails", isOn: $showThumbnailProgressBars)
-                    Text("Partially watched videos show a thin progress bar at the bottom of their thumbnail.")
-                }
-
-                settingsSection(title: "Restrictions") {
-                    RestrictionsSettingsView()
-                } footer: {
-                    Text("For shared TVs. With a PIN set, PeerTV asks for it when it opens, and when you come back to it after leaving for longer than “Ask for PIN” allows; it also asks to unblock a channel, show sensitive videos or turn the lock off. Blocking a channel never needs it. The PIN is stored only in the app, so deleting PeerTV removes it; that is also the way out of a forgotten PIN.")
-                }
-
-                settingsSection(title: "Navigation") {
-                    Picker("Tab bar", selection: $tabBarStyle) {
-                        ForEach(TabBarStyle.allCases) { style in
-                            Text(style.displayName).tag(style)
-                        }
-                    }
-                } footer: {
-                    Text("The sidebar needs tvOS 18 or later; earlier versions always show the top bar.")
-                }
-
-                // settingsSection(title: "Appearance") {
-                //     Picker("Color theme", selection: $appThemeStore.theme) {
-                //         ForEach(AppColorTheme.allCases) { theme in
-                //             Text(theme.displayName).tag(theme)
-                //         }
-                //     }
-                // } footer: {
-                //     Text("System follows Apple TV settings. Other themes use a dark base with a different accent color.")
-                // }
-
-                if !session.isAnonymous, DebugFlags.showAPIExplorer {
-                    settingsSection(title: "Developer") {
-                        Toggle("Shuffle Tab", isOn: $shuffleEnabled)
-                            .onChange(of: shuffleEnabled) { _, newValue in
-                                DebugFlags.shuffleTabEnabled = newValue
-                            }
-
-                        Toggle("Show Raw JSON on video details", isOn: $showVideoDetailRawJSON)
-                            .onChange(of: showVideoDetailRawJSON) { _, newValue in
-                                DebugFlags.showVideoDetailRawJSON = newValue
-                            }
-                    } footer: {
-                        Text("Shuffle needs the random-video-tab plugin on your server.")
-                    }
-                }
-
-                settingsSection(title: "Help") {
-                    NavigationLink {
-                        ControlsHelpView()
-                    } label: {
-                        HStack {
-                            Image(systemName: "hand.tap.fill")
-                            Text("Controls")
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 16)
-                        .padding(.horizontal, 20)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.card)
-                } footer: {
-                    Text("Discover hidden gestures and remote shortcuts for browsing and playback.")
-                }
-
-                settingsSection(title: "About") {
-                    LabeledContent("App Version", value: Self.appVersionText)
-                    LabeledContent("Platform", value: "tvOS")
-                }
-
-                if DebugFlags.showAPIExplorer {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Tools")
-                            .font(.title3)
-                            .bold()
-                            .foregroundStyle(.secondary)
-
-                        NavigationLink {
-                            APIExplorerView()
-                        } label: {
-                            HStack {
-                                Text("API Explorer")
-                                    .font(.body)
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 16)
-                            .padding(.horizontal, 20)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.card)
-                    }
-                }
+                .frame(width: geo.size.width / 2)
+                .focusSection()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 50)
-            .padding(.top, 40)
-            .padding(.bottom, 120)
+        }
+        .ignoresSafeArea()
         }
         .onAppear { refreshPlaybackSettings() }
         .onChange(of: session.phase) { _, _ in refreshPlaybackSettings() }
@@ -303,6 +99,187 @@ struct SettingsView: View {
         }
         .onChange(of: showThumbnailProgressBars) { _, newValue in
             ThumbnailProgressBarSettings.isVisible = newValue
+        }
+    }
+
+    /// What the brand panel says the app is connected to.
+    private var connectionDescription: String {
+        if session.isAnonymous {
+            if let host = session.baseURL?.host, !host.isEmpty { return "Browsing \(host) anonymously" }
+            return "Browsing anonymously"
+        }
+        if let account = session.sortedAccounts.first(where: { $0.id == session.activeAccountId }) {
+            return "Signed in as \(account.handle)"
+        }
+        return session.baseURL?.host ?? ""
+    }
+
+    // MARK: - Settings list (right half)
+
+    @ViewBuilder
+    private var settingsList: some View {
+        VStack(alignment: .leading, spacing: 44) {
+            Text("Settings")
+                .font(.title2)
+                .bold()
+
+            SettingsListSection(
+                title: "Accounts",
+                footer: session.isAnonymous
+                    ? "Sign out ends anonymous browsing. Adding an account signs you in and leaves anonymous mode."
+                    : "The selected account is used across the app. Sign out removes that account's saved login only."
+            ) {
+                if session.isAnonymous {
+                    anonymousAccountsSection
+                } else {
+                    ForEach(session.sortedAccounts) { account in
+                        accountRow(account)
+                    }
+                }
+                Button {
+                    session.beginAddAccount()
+                } label: {
+                    SettingsRowLabel(title: "Add Account", systemImage: "plus.circle.fill", showsChevron: true)
+                }
+                .buttonStyle(.card)
+            }
+
+            if !session.isAnonymous {
+                SettingsListSection(title: "Downloads") {
+                    NavigationLink {
+                        DownloadedVideosView()
+                    } label: {
+                        SettingsRowLabel(
+                            title: "Downloaded Videos",
+                            systemImage: "arrow.down.circle",
+                            value: downloadManager.downloadedVideos.isEmpty ? "None" : downloadManager.downloadedVideos.storageSummary,
+                            showsChevron: true
+                        )
+                    }
+                    .buttonStyle(.card)
+                }
+            }
+
+            SettingsListSection(title: "Playback") {
+                SettingsChoiceRow(
+                    title: "Default quality",
+                    message: "Applies when a video opens. If that resolution isn't offered, the next lower one plays, or Auto if none is. Auto uses HLS adaptive bitrate.",
+                    options: DefaultResolution.allCases.map { ($0.rawValue, $0.displayName) },
+                    selection: $defaultResolutionRawValue
+                )
+                SettingsChoiceRow(
+                    title: "Default speed",
+                    message: "Every video starts at this speed, including the next one in a playlist. Changing speed in the player only affects the video you're watching.",
+                    options: PlayerSettings.playbackSpeeds.map { (Double($0), PlayerSettings.speedLabel($0)) },
+                    selection: $defaultPlaybackSpeed
+                )
+                SettingsChoiceRow(
+                    title: "Hold speed",
+                    message: "Speed while you hold the touchpad click, or rest a finger on the touchpad during playback.",
+                    options: PlayerSettings.holdSpeeds.map { (Double($0), PlayerSettings.speedLabel($0)) },
+                    selection: $holdSpeed
+                )
+                SettingsChoiceRow(
+                    title: "Skip interval",
+                    message: "How far a left or right tap on the scrubber jumps.",
+                    options: PlayerSettings.skipIntervals.map { ($0, "\(Int($0)) seconds") },
+                    selection: $skipInterval
+                )
+                SettingsChoiceRow(
+                    title: "Playback stats",
+                    message: "The readout under the scrubber: download speed and buffering, optionally with the playing resolution and bitrate, or nothing.",
+                    options: PlaybackStatsDisplay.allCases.map { ($0.rawValue, $0.displayName) },
+                    selection: $playbackStatsRawValue
+                )
+                SettingsChoiceRow(
+                    title: "Still watching?",
+                    message: "Playlists only. When a video ends and the next one is about to start, the player asks whether you’re still watching if the remote hasn’t been used for this long. Any press on the remote restarts the count.",
+                    options: StillWatchingInterval.allCases.map { ($0.rawValue, $0.displayName) },
+                    selection: $stillWatchingRawValue
+                )
+                SettingsChoiceRow(
+                    title: "Buffer cap",
+                    message: "Roughly how much video is kept loaded ahead of where you are. The same cap covers less time at higher quality. Larger caps smooth over slow networks at the cost of memory.",
+                    options: BufferCap.allCases.map { ($0.rawValue, $0.displayName) },
+                    selection: $bufferCapRawValue
+                )
+                SettingsToggleRow(
+                    title: "Resume playback",
+                    subtitle: "Pick up where you left off. Cleared when a video finishes.",
+                    isOn: $resumePlaybackEnabled
+                )
+                if resumePlaybackEnabled {
+                    Button {
+                        showClearPositionsAlert = true
+                    } label: {
+                        SettingsRowLabel(title: "Clear saved positions", value: "\(savedPositionCount) saved")
+                    }
+                    .buttonStyle(.card)
+                }
+                SettingsToggleRow(
+                    title: "Preview thumbnails on focus",
+                    subtitle: "Highlighted tiles cycle through preview frames.",
+                    isOn: $tilePreviewEnabled
+                )
+                SettingsToggleRow(
+                    title: "Show progress on thumbnails",
+                    subtitle: "A thin bar on partly watched videos.",
+                    isOn: $showThumbnailProgressBars
+                )
+            }
+
+            SettingsListSection(
+                title: "Restrictions",
+                footer: "For shared TVs. With a PIN set, PeerTV asks for it when it opens and when you come back after being away longer than “Ask for PIN” allows, and to unblock a channel, show sensitive videos or turn the lock off. Blocking never needs it. The PIN is stored only in the app: deleting PeerTV removes it, which is also the way out of a forgotten PIN."
+            ) {
+                RestrictionsSettingsView()
+            }
+
+            SettingsListSection(title: "Navigation", footer: "The sidebar needs tvOS 18 or later; earlier versions always show the top bar.") {
+                SettingsChoiceRow(
+                    title: "Tab bar",
+                    options: TabBarStyle.allCases.map { ($0, $0.displayName) },
+                    selection: $tabBarStyle
+                )
+            }
+
+            if !session.isAnonymous, DebugFlags.showAPIExplorer {
+                SettingsListSection(title: "Developer", footer: "Shuffle needs the random-video-tab plugin on your server.") {
+                    SettingsToggleRow(title: "Shuffle Tab", isOn: shuffleEnabled) { newValue in
+                        shuffleEnabled = newValue
+                        DebugFlags.shuffleTabEnabled = newValue
+                    }
+                    SettingsToggleRow(title: "Show Raw JSON on video details", isOn: showVideoDetailRawJSON) { newValue in
+                        showVideoDetailRawJSON = newValue
+                        DebugFlags.showVideoDetailRawJSON = newValue
+                    }
+                    NavigationLink {
+                        APIExplorerView()
+                    } label: {
+                        SettingsRowLabel(title: "API Explorer", systemImage: "curlybraces", showsChevron: true)
+                    }
+                    .buttonStyle(.card)
+                }
+            }
+
+            SettingsListSection(title: "Help") {
+                NavigationLink {
+                    ControlsHelpView()
+                } label: {
+                    SettingsRowLabel(
+                        title: "Controls",
+                        systemImage: "hand.tap.fill",
+                        subtitle: "Gestures and remote shortcuts for browsing and playback.",
+                        showsChevron: true
+                    )
+                }
+                .buttonStyle(.card)
+            }
+
+            SettingsListSection(title: "About") {
+                SettingsInfoRow(title: "App Version", value: Self.appVersionText)
+                SettingsInfoRow(title: "Platform", value: "tvOS")
+            }
         }
     }
 
@@ -455,34 +432,6 @@ struct SettingsView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(isActive ? Color.accentColor : Color.white.opacity(0.12), lineWidth: isActive ? 2 : 1)
             )
-        }
-    }
-
-    @ViewBuilder
-    private func settingsSection(title: String, @ViewBuilder content: () -> some View) -> some View {
-        settingsSection(title: title, content: content, footer: { EmptyView() })
-    }
-
-    @ViewBuilder
-    private func settingsSection<F: View>(
-        title: String,
-        @ViewBuilder content: () -> some View,
-        @ViewBuilder footer: () -> F
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.title3)
-                .bold()
-                .foregroundStyle(.secondary)
-
-            VStack(alignment: .leading, spacing: 16) {
-                content()
-            }
-            .padding(.vertical, 8)
-
-            footer()
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
     }
 }

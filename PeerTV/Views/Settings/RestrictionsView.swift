@@ -251,7 +251,7 @@ struct RestrictionsSettingsView: View {
     @State private var pinPrompt: PINPrompt?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             Button {
                 if restrictions.isLocked {
                     pinPrompt = .unlock(reason: "Turning the lock off needs the PIN.") { pin in
@@ -263,16 +263,12 @@ struct RestrictionsSettingsView: View {
                     }
                 }
             } label: {
-                HStack {
-                    Image(systemName: restrictions.isLocked ? "lock.fill" : "lock.open")
-                    Text(restrictions.isLocked ? "Turn Off PIN Lock" : "Turn On PIN Lock")
-                    Spacer()
-                    Text(restrictions.isLocked ? "On" : "Off")
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 16)
-                .padding(.horizontal, 20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                SettingsRowLabel(
+                    title: "PIN Lock",
+                    systemImage: restrictions.isLocked ? "lock.fill" : "lock.open",
+                    subtitle: restrictions.isLocked ? "Press to turn off." : "Press to choose a PIN.",
+                    value: restrictions.isLocked ? "On" : "Off"
+                )
             }
             .buttonStyle(.card)
 
@@ -280,63 +276,46 @@ struct RestrictionsSettingsView: View {
                 Button {
                     pinPrompt = .change
                 } label: {
-                    HStack {
-                        Image(systemName: "key")
-                        Text("Change PIN")
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 16)
-                    .padding(.horizontal, 20)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    SettingsRowLabel(title: "Change PIN", systemImage: "key", showsChevron: true)
                 }
                 .buttonStyle(.card)
-            }
 
-            if restrictions.isLocked {
-                Picker("Ask for PIN", selection: Binding(
-                    get: { restrictions.lockDelay },
-                    set: { delay in
-                        pinPrompt = .unlock(reason: "Changing when PeerTV locks needs the PIN.") { pin in
-                            restrictions.setLockDelay(delay, pin: pin)
-                        }
-                    }
-                )) {
-                    ForEach(AppLockDelay.allCases) { delay in
-                        Text(delay.displayName).tag(delay)
+                SettingsChoiceRow(
+                    title: "Ask for PIN",
+                    message: "How long PeerTV can be left before coming back to it asks for the PIN. Opening the app fresh always asks.",
+                    options: AppLockDelay.allCases.map { ($0, $0.displayName) },
+                    selection: restrictions.lockDelay
+                ) { delay in
+                    guard delay != restrictions.lockDelay else { return }
+                    pinPrompt = .unlock(reason: "Changing when PeerTV locks needs the PIN.") { pin in
+                        restrictions.setLockDelay(delay, pin: pin)
                     }
                 }
             }
 
-            Toggle("Hide sensitive videos", isOn: Binding(
-                get: { restrictions.hideSensitive },
-                set: { hide in
-                    if restrictions.isLocked {
-                        pinPrompt = .unlock(reason: "Changing this needs the PIN.") { pin in
-                            restrictions.setHideSensitive(hide, pin: pin)
-                        }
-                    } else {
-                        restrictions.setHideSensitive(hide, pin: nil)
+            SettingsToggleRow(
+                title: "Hide sensitive videos",
+                subtitle: "Videos their uploader marked sensitive.",
+                isOn: restrictions.hideSensitive
+            ) { hide in
+                if restrictions.isLocked {
+                    pinPrompt = .unlock(reason: "Changing this needs the PIN.") { pin in
+                        restrictions.setHideSensitive(hide, pin: pin)
                     }
+                } else {
+                    restrictions.setHideSensitive(hide, pin: nil)
                 }
-            ))
+            }
 
             NavigationLink {
                 BlockedChannelsListView()
             } label: {
-                HStack {
-                    Image(systemName: "hand.raised")
-                    Text("Blocked Channels")
-                    Spacer()
-                    Text(restrictions.blockedChannels.isEmpty ? "None" : "\(restrictions.blockedChannels.count)")
-                        .foregroundStyle(.secondary)
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 16)
-                .padding(.horizontal, 20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                SettingsRowLabel(
+                    title: "Blocked Channels",
+                    systemImage: "hand.raised",
+                    value: restrictions.blockedChannels.isEmpty ? "None" : "\(restrictions.blockedChannels.count)",
+                    showsChevron: true
+                )
             }
             .buttonStyle(.card)
         }

@@ -19,6 +19,7 @@
 		2BA8973501BED0219707B68F /* DebugFlags.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6BC9C2DE9B71E55CB67457F /* DebugFlags.swift */; };
 		2BBF6DC481B447AC6214EDAC /* VideoGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75E46EDE3001222FB67D18EF /* VideoGridView.swift */; };
 		31A40F6A6AEA8C5766DDFB4E /* Endpoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = B744C00B446D33F41689EC00 /* Endpoint.swift */; };
+		CAC4E0BB000000000000001 /* HLSCacheProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAC4E0AA000000000000001 /* HLSCacheProxy.swift */; };
 		33897146F13A8BB646E04D1F /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CA3EA431DD3E31DF204637D /* LoginView.swift */; };
 		416EDD1874495B757FB2BB8B /* User.swift in Sources */ = {isa = PBXBuildFile; fileRef = F35E5F918DA8B8A80F4560A6 /* User.swift */; };
 		4863921FBF3D4032DFEF8195 /* PaginatedResponse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E35934C57A189BB150E61AE /* PaginatedResponse.swift */; };
@@ -72,6 +73,7 @@
 		DD44001122334455AA66BB02 /* VideoDownloadBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD44001122334455AA66BB01 /* VideoDownloadBar.swift */; };
 		DD55001122334455AA66BB02 /* DownloadedVideosView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD55001122334455AA66BB01 /* DownloadedVideosView.swift */; };
 		DD55001122334455AA66BB12 /* RestrictionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD55001122334455AA66BB11 /* RestrictionsView.swift */; };
+		DD55001122334455AA66BB22 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD55001122334455AA66BB21 /* SettingsComponents.swift */; };
 		DD77001122334455AA66BB02 /* VideoDownloadQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD77001122334455AA66BB01 /* VideoDownloadQuality.swift */; };
 		E3B76692C2EE5B0978E49FD4 /* SubscriptionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 216F76B265C16AAECE2543BE /* SubscriptionsView.swift */; };
 		E4E8FF097E3B21BEA2671184 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97F3CAA913F542F02F4F5391 /* SessionStore.swift */; };
@@ -147,6 +149,7 @@
 		ANONAA00000000000000004 /* AnonymousRestrictedAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnonymousRestrictedAlert.swift; sourceTree = "<group>"; };
 		ANONAA00000000000000005 /* OnboardingChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingChrome.swift; sourceTree = "<group>"; };
 		B744C00B446D33F41689EC00 /* Endpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Endpoint.swift; sourceTree = "<group>"; };
+		CAC4E0AA000000000000001 /* HLSCacheProxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSCacheProxy.swift; sourceTree = "<group>"; };
 		B8B1529B15FB44BF5769868F /* DebugRawJSONView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugRawJSONView.swift; sourceTree = "<group>"; };
 		B8BF2ADF0A6085FE2CCB01FE /* ChannelsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChannelsListView.swift; sourceTree = "<group>"; };
 		BB11001122334455AA66BB01 /* TabBarControllerFocusLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarControllerFocusLock.swift; sourceTree = "<group>"; };
@@ -169,6 +172,7 @@
 		DD44001122334455AA66BB01 /* VideoDownloadBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDownloadBar.swift; sourceTree = "<group>"; };
 		DD55001122334455AA66BB01 /* DownloadedVideosView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadedVideosView.swift; sourceTree = "<group>"; };
 		DD55001122334455AA66BB11 /* RestrictionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestrictionsView.swift; sourceTree = "<group>"; };
+		DD55001122334455AA66BB21 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
 		DD581DC9AD1A608D9FA1A601 /* HomeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeViewModel.swift; sourceTree = "<group>"; };
 		DD77001122334455AA66BB01 /* VideoDownloadQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDownloadQuality.swift; sourceTree = "<group>"; };
 		E6D85C474ED072C451CC3385 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -224,6 +228,7 @@
 			isa = PBXGroup;
 			children = (
 				B744C00B446D33F41689EC00 /* Endpoint.swift */,
+				CAC4E0AA000000000000001 /* HLSCacheProxy.swift */,
 				F7CF7907D68F94DAFE2822DA /* OAuthService.swift */,
 				EE19C427CDD1860AF0C52984 /* PeerTubeAPIClient.swift */,
 				FF33445555667788AABB0002 /* PeerTubeOriginClients.swift */,
@@ -239,6 +244,7 @@
 			children = (
 				DD55001122334455AA66BB01 /* DownloadedVideosView.swift */,
 				DD55001122334455AA66BB11 /* RestrictionsView.swift */,
+				DD55001122334455AA66BB21 /* SettingsComponents.swift */,
 				CH11223344556677AABB0001 /* ControlsHelpView.swift */,
 				987D5472FE53160F9C48E251 /* SettingsView.swift */,
 			);
@@ -522,6 +528,7 @@
 				DD77001122334455AA66BB02 /* VideoDownloadQuality.swift in Sources */,
 				DD33001122334455AA66BB02 /* DownloadManager.swift in Sources */,
 				31A40F6A6AEA8C5766DDFB4E /* Endpoint.swift in Sources */,
+				CAC4E0BB000000000000001 /* HLSCacheProxy.swift in Sources */,
 				6CED1D99488812E0A8004348 /* OAuthService.swift in Sources */,
 				517F0D674703589AB60E1DB0 /* PeerTubeAPIClient.swift in Sources */,
 				C63231B87BA379DD1729BEFF /* TokenStore.swift in Sources */,
@@ -570,6 +577,7 @@
 				F73A4ACEDD46711AA66A840C /* SettingsView.swift in Sources */,
 				DD55001122334455AA66BB02 /* DownloadedVideosView.swift in Sources */,
 				DD55001122334455AA66BB12 /* RestrictionsView.swift in Sources */,
+				DD55001122334455AA66BB22 /* SettingsComponents.swift in Sources */,
 				CH11223344556677AABB0002 /* ControlsHelpView.swift in Sources */,
 				563EC8FE6C62B36776184138 /* ChannelsListView.swift in Sources */,
 				8D8AA7E53D00A45EEE42B6A6 /* HistoryView.swift in Sources */,
@@ -604,7 +612,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = R6WYB662P7;
 				INFOPLIST_FILE = PeerTV/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PeerTV;
@@ -615,7 +623,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.16;
+				MARKETING_VERSION = 1.17;
 				PRODUCT_BUNDLE_IDENTIFIER = com.verofide.PeerTV;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -661,7 +669,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = R6WYB662P7;
 				INFOPLIST_FILE = PeerTV/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PeerTV;
@@ -672,7 +680,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.16;
+				MARKETING_VERSION = 1.17;
 				PRODUCT_BUNDLE_IDENTIFIER = com.verofide.PeerTV;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

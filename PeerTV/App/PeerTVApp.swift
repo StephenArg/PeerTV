@@ -29,6 +29,8 @@ struct PeerTVApp: App {
         // Only the category is set here. Activating the session is what stops other apps' audio,
         // so that waits until a video starts (`PlayerPresenter.presentPlayer`).
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        // Ready before the first video, so opening one doesn't wait for it.
+        HLSCacheProxy.shared.start()
     }
 
     var body: some Scene {

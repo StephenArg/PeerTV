@@ -103,7 +103,8 @@ enum PlaybackStatsDisplay: Int, CaseIterable, Identifiable {
     }
 }
 
-/// Playback time without any remote input before the player asks "Still watching?".
+/// Time without any remote input after which playlist autoplay asks "Still watching?" before
+/// starting the next video.
 enum StillWatchingInterval: Int, CaseIterable, Identifiable {
     case off = 0
     case thirtyMinutes = 30
@@ -112,7 +113,7 @@ enum StillWatchingInterval: Int, CaseIterable, Identifiable {
     case threeHours = 180
     case fourHours = 240
 
-    static let `default`: StillWatchingInterval = .twoHours
+    static let `default`: StillWatchingInterval = .threeHours
 
     var id: Int { rawValue }
 
@@ -197,7 +198,7 @@ enum PlayerSettings {
         return PlaybackStatsDisplay(rawValue: UserDefaults.standard.integer(forKey: playbackStatsKey)) ?? .networkSpeed
     }
 
-    /// On by default (two hours); `.off` disables the prompt.
+    /// On by default (three hours); `.off` disables the prompt.
     static var stillWatchingInterval: StillWatchingInterval {
         guard UserDefaults.standard.object(forKey: stillWatchingKey) != nil else { return .default }
         return StillWatchingInterval(rawValue: UserDefaults.standard.integer(forKey: stillWatchingKey)) ?? .default
