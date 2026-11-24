@@ -294,6 +294,21 @@ struct RestrictionsSettingsView: View {
                 .buttonStyle(.card)
             }
 
+            if restrictions.isLocked {
+                Picker("Ask for PIN", selection: Binding(
+                    get: { restrictions.lockDelay },
+                    set: { delay in
+                        pinPrompt = .unlock(reason: "Changing when PeerTV locks needs the PIN.") { pin in
+                            restrictions.setLockDelay(delay, pin: pin)
+                        }
+                    }
+                )) {
+                    ForEach(AppLockDelay.allCases) { delay in
+                        Text(delay.displayName).tag(delay)
+                    }
+                }
+            }
+
             Toggle("Hide sensitive videos", isOn: Binding(
                 get: { restrictions.hideSensitive },
                 set: { hide in
@@ -411,9 +426,10 @@ struct BlockedChannelsListView: View {
 
 // MARK: - App lock
 
-/// While a PIN is set, PeerTV opens to a PIN screen: at launch and each time it comes back from
-/// the background. The screen lives in its own window above the app's, so it also covers the
-/// player (presented through UIKit) and anything else on screen.
+/// While a PIN is set, PeerTV opens to a PIN screen at launch, and again when it comes back after
+/// being away (on the Apple TV Home screen or in another app) for at least the Lock setting's
+/// delay. Nothing inside the app (closing the player, switching tabs) locks it. The screen lives
+/// in its own window above the app's, so it also covers the player and anything else on screen.
 ///
 /// The PIN is kept in the app's UserDefaults, never the Keychain, so deleting PeerTV removes it.
 @MainActor
@@ -422,10 +438,45 @@ final class AppLockController {
 
     private var lockWindow: UIWindow?
     private weak var previousKeyWindow: UIWindow?
+    private var didCheckLaunch = false
+    private var backgroundedAt: Date?
 
     var isShowing: Bool { lockWindow != nil }
 
-    func lockIfNeeded() {
+    private init() {
+        let center = NotificationCenter.default
+        center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { AppLockController.shared.didEnterBackground() }
+        }
+        center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { AppLockController.shared.willEnterForeground() }
+        }
+    }
+
+    /// Locks once per launch; later calls (the root view reappearing) do nothing.
+    func lockAtLaunchIfNeeded() {
+        guard !didCheckLaunch else { return }
+        didCheckLaunch = true
+        lockIfNeeded()
+    }
+
+    private func didEnterBackground() {
+        backgroundedAt = Date()
+        // With no grace period, cover the app now so it never shows unlocked on return.
+        if ContentRestrictions.shared.lockDelay == .immediately {
+            lockIfNeeded()
+        }
+    }
+
+    private func willEnterForeground() {
+        guard let since = backgroundedAt else { return }
+        backgroundedAt = nil
+        if Date().timeIntervalSince(since) >= ContentRestrictions.shared.lockDelay.seconds {
+            lockIfNeeded()
+        }
+    }
+
+    private func lockIfNeeded() {
         guard ContentRestrictions.shared.isLocked, lockWindow == nil else { return }
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else { return }

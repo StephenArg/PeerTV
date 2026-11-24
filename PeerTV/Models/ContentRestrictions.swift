@@ -2,6 +2,30 @@ import CryptoKit
 import Foundation
 import Security
 
+/// How long PeerTV can be in the background before it asks for the PIN again. A fresh launch
+/// always asks.
+enum AppLockDelay: Int, CaseIterable, Identifiable {
+    case immediately = 0
+    case oneMinute = 1
+    case twoMinutes = 2
+    case fiveMinutes = 5
+    case tenMinutes = 10
+    case fifteenMinutes = 15
+    case thirtyMinutes = 30
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .immediately: return "Immediately"
+        case .oneMinute: return "After 1 minute"
+        default: return "After \(rawValue) minutes"
+        }
+    }
+
+    var seconds: TimeInterval { TimeInterval(rawValue * 60) }
+}
+
 /// A channel hidden everywhere in the app (Settings → Restrictions → Blocked Channels).
 struct BlockedChannel: Codable, Identifiable, Hashable {
     /// `name@host`, lowercased. The same channel reached through another server has the same handle.
@@ -25,12 +49,15 @@ final class ContentRestrictions: ObservableObject {
     nonisolated static let pinHashKey = "PeerTV.restrictions.pinHash"
     nonisolated static let pinSaltKey = "PeerTV.restrictions.pinSalt"
     nonisolated static let hideSensitiveKey = "PeerTV.restrictions.hideSensitive"
+    nonisolated static let lockDelayKey = "PeerTV.restrictions.lockDelayMinutes"
     nonisolated static let blockedChannelsKey = "PeerTV.restrictions.blockedChannels"
     nonisolated static let pinLength = 4
 
     /// True while a PIN is set.
     @Published private(set) var isLocked: Bool
     @Published private(set) var hideSensitive: Bool
+    /// Time away before returning to the app asks for the PIN. Defaults to immediately.
+    @Published private(set) var lockDelay: AppLockDelay
     @Published private(set) var blockedChannels: [BlockedChannel]
 
     private let defaults: UserDefaults
@@ -40,6 +67,7 @@ final class ContentRestrictions: ObservableObject {
         self.defaults = defaults
         isLocked = defaults.string(forKey: Self.pinHashKey) != nil
         hideSensitive = defaults.bool(forKey: Self.hideSensitiveKey)
+        lockDelay = AppLockDelay(rawValue: defaults.integer(forKey: Self.lockDelayKey)) ?? .immediately
         let list: [BlockedChannel] = {
             guard let data = defaults.data(forKey: Self.blockedChannelsKey) else { return [] }
             return (try? JSONDecoder().decode([BlockedChannel].self, from: data)) ?? []
@@ -94,6 +122,14 @@ final class ContentRestrictions: ObservableObject {
         blockedChannels.removeAll { $0.handle == key }
         blockedHandles.remove(key)
         saveBlockedChannels()
+        return true
+    }
+
+    @discardableResult
+    func setLockDelay(_ delay: AppLockDelay, pin: String?) -> Bool {
+        guard authorize(pin) else { return false }
+        lockDelay = delay
+        defaults.set(delay.rawValue, forKey: Self.lockDelayKey)
         return true
     }
 

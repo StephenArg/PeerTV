@@ -157,7 +157,7 @@ struct SettingsView: View {
                 settingsSection(title: "Restrictions") {
                     RestrictionsSettingsView()
                 } footer: {
-                    Text("For shared TVs. With a PIN set, PeerTV asks for it every time it opens or comes back from the background, and again to unblock a channel, show sensitive videos or turn the lock off. Blocking a channel never needs it. The PIN is stored only in the app, so deleting PeerTV removes it; that is also the way out of a forgotten PIN.")
+                    Text("For shared TVs. With a PIN set, PeerTV asks for it when it opens, and when you come back to it after leaving for longer than “Ask for PIN” allows; it also asks to unblock a channel, show sensitive videos or turn the lock off. Blocking a channel never needs it. The PIN is stored only in the app, so deleting PeerTV removes it; that is also the way out of a forgotten PIN.")
                 }
 
                 settingsSection(title: "Navigation") {
